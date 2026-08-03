@@ -1,18 +1,19 @@
 import React from 'react';
 import { Route, Routes } from 'react-router-dom';
 
-// This is a temporary placeholder component from spark-framework
-import { Welcome } from '@lark-apaas/client-toolkit/components/Welcome';
-
 import Layout from './components/Layout';
 import NotFound from './pages/NotFound/NotFound';
+import TodayHot from './pages/TodayHot/TodayHot';
+import Workbench from './pages/Workbench/Workbench';
+import SourceManage from './pages/SourceManage/SourceManage';
 
 const RoutesComponent = () => {
   return (
     <Routes>
       <Route element={<Layout />}>
-        {/* This Welcome component should be replaced with the actual home page content */}
-        <Route index element={<Welcome />} />
+        <Route index element={<TodayHot />} />
+        <Route path="workbench" element={<Workbench />} />
+        <Route path="sources" element={<SourceManage />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
