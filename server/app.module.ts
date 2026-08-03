@@ -9,6 +9,7 @@ import { ArticleModule } from './modules/article/article.module';
 import { CollectorModule } from './modules/collector/collector.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
+import { HotlistModule } from './modules/hotlist/hotlist.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ReviewModule } from './modules/review/review.module';
     CollectorModule,
     DigestModule,
     ReviewModule,
+    HotlistModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last

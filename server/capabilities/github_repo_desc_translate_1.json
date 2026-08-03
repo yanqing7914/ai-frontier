@@ -1,0 +1,38 @@
+{
+  "id": "github_repo_desc_translate_1",
+  "pluginKey": "@official-plugins/ai-text-to-json",
+  "pluginVersion": "1.0.24",
+  "name": "GitHub仓库英文简介翻译",
+  "description": "将GitHub仓库的英文简介翻译改写为通顺的中文描述，输出结构化JSON格式，包含description_zh字段。",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "repo_desc_en": {
+        "type": "string",
+        "description": "GitHub仓库的英文简介文本"
+      }
+    },
+    "required": [
+      "repo_desc_en"
+    ]
+  },
+  "formValue": {
+    "modelParams": {
+      "maxTokens": 8192,
+      "temperature": 0.5
+    },
+    "prompt": "你是一位专业的技术翻译专家，擅长将GitHub仓库的英文简介翻译成通顺自然的中文。请将以下英文描述翻译为中文，用一句清晰易懂的话讲清楚这个仓库是什么、主要用来做什么，不要直译，要符合中文技术社区的表达习惯。\n英文描述：{{input.repo_desc_en}}",
+    "jsonStructure": [
+      {
+        "name": "description_zh",
+        "paramType": "String",
+        "paramDescription": "GitHub仓库的中文简介，用一句通顺的话说明仓库的用途和功能"
+      }
+    ],
+    "modelID": "2015"
+  },
+  "createdAt": 1785744627882,
+  "updatedAt": 1785744627882,
+  "createdBy": 7618398883458124756
+}

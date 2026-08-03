@@ -174,6 +174,35 @@ export interface WorkbenchOverview {
   aiDegraded: boolean;
 }
 
+export type HotlistKind = 'github' | 'weibo';
+
+export interface GithubTrendingItem {
+  rank: number;
+  repo: string;
+  url: string;
+  description: string;
+  descriptionZh: string;
+  language: string;
+  stars: number;
+  starsToday: number;
+}
+
+export interface WeiboHotItem {
+  rank: number;
+  title: string;
+  url: string;
+  hot: number;
+  tag: string;
+}
+
+export interface HotlistResponse<T = GithubTrendingItem | WeiboHotItem> {
+  ok: boolean;
+  kind: HotlistKind;
+  updatedAt: string;
+  source: 'live' | 'snapshot';
+  items: T[];
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;

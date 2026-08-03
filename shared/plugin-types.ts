@@ -43,3 +43,25 @@ export interface AiArticleScoringOneOutput {
   scores: AllDirectionScores;
 }
 // ---- end:ai_article_scoring_1 ----
+
+// ---- plugin:github_repo_desc_translate_1 ----
+// ============================================================
+// 插件 github_repo_desc_translate_1 (GitHub仓库英文简介翻译) 的类型定义
+// 由 get_plugin_ai_json 自动生成
+// ============================================================
+
+export interface GithubRepoDescTranslateOneInput {
+  /** GitHub仓库的英文简介文本 */
+  repo_desc_en: string;
+}
+
+/**
+ * capabilityClient.load('github_repo_desc_translate_1').call<GithubRepoDescTranslateOneOutput>('textToJson', input)
+ * 直接返回此类型，无 .data 包装，直接解构使用：
+ * const { description_zh } = result;
+ */
+export interface GithubRepoDescTranslateOneOutput {
+  /** GitHub仓库的中文简介，用一句通顺的话说明仓库的用途和功能 */
+  description_zh: string;
+}
+// ---- end:github_repo_desc_translate_1 ----

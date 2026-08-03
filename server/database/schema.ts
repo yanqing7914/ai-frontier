@@ -117,6 +117,28 @@ export const fileAttachmentArray = customType<{
   },
 });
 
+export const hotlistSnapshot = pgTable("hotlist_snapshot", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  kind: varchar("kind", { length: 50 }).notNull().unique(),
+  /**
+   * @type any[]
+   */
+  items: jsonb("items").notNull().default('[]'),
+  snapshotAt: customTimestamptz("snapshot_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  uniqueIndex("hotlist_snapshot_kind_key").on(table.kind),
+]);
+
 export const appConfig = pgTable("app_config", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: varchar("key", { length: 255 }).notNull().unique(),
@@ -308,5 +330,6 @@ export const articleTable = article;
 export const dailyDigestTable = dailyDigest;
 export const directionScoreTable = directionScore;
 export const feedSourceTable = feedSource;
+export const hotlistSnapshotTable = hotlistSnapshot;
 export const qualityGateTable = qualityGate;
 export const reviewItemTable = reviewItem;
