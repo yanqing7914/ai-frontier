@@ -211,7 +211,7 @@
       "id": 7,
       "name": "采集流水线模块开发",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 trigger-guide skill 确认定时任务配置规范",
         "实现 RSS 批量抓取服务：读取启用信息源列表，分批并发抓取（限制并发数），每个源独立 try-catch，失败退避重试（最多 3 次指数退避），更新 feed_source 健康统计字段",
@@ -250,13 +250,14 @@
         4,
         6
       ],
-      "beginTime": 1785742789260
+      "beginTime": 1785742789260,
+      "endTime": 1785743159408
     },
     {
       "id": 8,
       "name": "验收测试",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 testing-guide skill，确认验收流程与规范",
         "架构与入口检查：对照代码架构设计检查模块注册、路由配置、导航项是否完整；确认应用入口页面（今日热点 /）可访问，入口不可用时停止全部验收仅记录阻塞问题",
@@ -280,7 +281,8 @@
         5,
         6,
         7
-      ]
+      ],
+      "beginTime": 1785743159685
     }
   ]
 }
