@@ -258,12 +258,18 @@ export class HotlistService {
       );
       const language = langMatch ? langMatch[1].trim() : '';
 
-      // Extract total stars (first star count link)
+      // Extract total stars (capture full <a> inner content, strip tags, extract number)
       const starsMatch = block.match(
-        /\/stargazers[^>]*>[\s\n]*([^<]+)/,
+        /href="\/[^"]*\/stargazers"[^>]*>([\s\S]*?)<\/a>/,
       );
       const stars = starsMatch
-        ? parseInt(starsMatch[1].replace(/,/g, '').trim(), 10) || 0
+        ? parseInt(
+            starsMatch[1]
+              .replace(/<[^>]*>/g, '')
+              .replace(/,/g, '')
+              .trim(),
+            10,
+          ) || 0
         : 0;
 
       // Extract stars today/this week
