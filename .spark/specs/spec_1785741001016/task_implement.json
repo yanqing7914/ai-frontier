@@ -18,7 +18,7 @@
       "id": 2,
       "name": "代码架构设计",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 coding-guide skill，确认项目结构与编码规范",
         "定义 shared/api.interface.ts 全部 API 请求响应类型（FeedSource、Article、DirectionScore、QualityGate、ReviewItem、DailyDigest、AppConfig 相关接口）",
@@ -53,13 +53,14 @@
       ],
       "acceptance": "前端三个路由渲染占位页面正常，后端五个模块注册编译通过，导航栏显示三个导航项，shared 类型定义完整",
       "dependencies": [],
-      "beginTime": 1785741554036
+      "beginTime": 1785741554036,
+      "endTime": 1785741702650
     },
     {
       "id": 3,
       "name": "数据库表创建与预置数据",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 sql skill，规划 7 张表的建表顺序（feed_source → article → direction_score → quality_gate → review_item → daily_digest → app_config）",
         "逐表执行 DDL 建表语句，每表完成后重新读取 schema.ts 确认字段",
@@ -76,13 +77,14 @@
       "acceptance": "7 张表全部创建成功，schema.ts 包含所有表定义，预置信息源和系统配置数据已插入",
       "dependencies": [
         2
-      ]
+      ],
+      "beginTime": 1785741703408
     },
     {
       "id": 4,
       "name": "插件实例创建与调用代码生成",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 plugin-guide skill，确认插件集成规范与服务端调用方式",
         "调用 plugin_instance 工具创建 article-ai-scoring 插件实例（基于 ai-text-to-json，用于文章摘要生成与 8 方向多维评分）",
@@ -106,7 +108,8 @@
       "acceptance": "article-ai-scoring 插件实例创建成功，服务端调用代码骨架按 Schema 摘录卡生成并通过编译验证",
       "dependencies": [
         2
-      ]
+      ],
+      "beginTime": 1785741703408
     },
     {
       "id": 5,

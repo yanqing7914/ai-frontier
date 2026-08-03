@@ -4,13 +4,22 @@ import { PlatformModule } from '@lark-apaas/fullstack-nestjs-core';
 
 import { GlobalExceptionFilter } from './common/filters/exception.filter';
 import { ViewModule } from './modules/view/view.module';
+import { FeedSourceModule } from './modules/feed-source/feed-source.module';
+import { ArticleModule } from './modules/article/article.module';
+import { CollectorModule } from './modules/collector/collector.module';
+import { DigestModule } from './modules/digest/digest.module';
+import { ReviewModule } from './modules/review/review.module';
 
 @Module({
   imports: [
     // 平台 Module，提供平台能力
     PlatformModule.forRoot(),
     // ====== @route-section: business-modules START ======
-    // Place all business modules here.Do NOT add fallback modules here.
+    FeedSourceModule,
+    ArticleModule,
+    CollectorModule,
+    DigestModule,
+    ReviewModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last
