@@ -155,7 +155,7 @@
       "id": 6,
       "name": "文章查询服务与阅读端页面开发（含前后端）",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 coding-guide skill 确认 API 规范与前端组件规范",
         "开发 article 模块后端（Module/Controller/Service），实现热点列表 API（status=published 分页+方向筛选+总分降序+聚类计数）、工作台概览统计、工作台文章列表（全状态分页筛选排序）、单条 8 方向打分明细查询、溯源链路查询",
@@ -204,13 +204,14 @@
         3,
         5
       ],
-      "beginTime": 1785742316138
+      "beginTime": 1785742316138,
+      "endTime": 1785742788940
     },
     {
       "id": 7,
       "name": "采集流水线模块开发",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 trigger-guide skill 确认定时任务配置规范",
         "实现 RSS 批量抓取服务：读取启用信息源列表，分批并发抓取（限制并发数），每个源独立 try-catch，失败退避重试（最多 3 次指数退避），更新 feed_source 健康统计字段",
@@ -248,7 +249,8 @@
         3,
         4,
         6
-      ]
+      ],
+      "beginTime": 1785742789260
     },
     {
       "id": 8,
