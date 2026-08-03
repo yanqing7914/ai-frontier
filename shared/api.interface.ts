@@ -2,7 +2,7 @@ export type Tier = 'authoritative' | 'validation' | 'signal';
 export type FeedType = 'rss' | 'atom' | 'web';
 export type Direction = 'agent' | 'model' | 'coding' | 'multi' | 'eval' | 'infra' | 'data' | 'security';
 export type ArticleStatus = 'published' | 'draft' | 'blocked' | 'pending_review';
-export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable';
+export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable' | 'same_url' | 'same_title' | 'same_batch_url' | 'same_batch_title' | 'source_unreliable';
 export type ReviewStatus = 'pending' | 'approved' | 'rejected';
 
 export interface FeedSource {
@@ -99,6 +99,7 @@ export interface WorkbenchArticleItem {
   primaryScore: number | null;
   status: ArticleStatus;
   aiProcessed: boolean;
+  aiDegradeReason: string | null;
   collectedAt: string;
 }
 
@@ -140,6 +141,8 @@ export interface ReviewActionRequest {
   note?: string;
 }
 
+export type TraceStatus = 'success' | 'failed' | 'not_needed';
+
 export interface ArticleTrace {
   articleId: string;
   title: string;
@@ -147,6 +150,7 @@ export interface ArticleTrace {
   originalUrl: string | null;
   sourceName: string;
   traced: boolean;
+  traceStatus: TraceStatus;
 }
 
 export interface DailyDigest {

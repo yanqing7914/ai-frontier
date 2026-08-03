@@ -14,33 +14,11 @@ export interface AiArticleScoringOneInput {
  * 直接返回此类型，无 .data 包装，直接解构使用：
  * const { summary, scores } = result;
  */
-/** 单方向的5维评分，每维度 0-20 整数 */
-export interface DirectionScores {
-  novelty: number;
-  depth: number;
-  impact: number;
-  authority: number;
-  timeliness: number;
-}
-
-/** 8个 AI 技术方向键 */
-export type ScoringDirection =
-  | 'agent'
-  | 'model'
-  | 'coding'
-  | 'multi'
-  | 'eval'
-  | 'infra'
-  | 'data'
-  | 'security';
-
-export type AllDirectionScores = Record<ScoringDirection, DirectionScores>;
-
 export interface AiArticleScoringOneOutput {
   /** 文章核心摘要，准确概括文章主要内容、核心观点和关键信息 */
   summary: string;
-  /** 8个方向的多维评分结果 */
-  scores: AllDirectionScores;
+  /** 8个方向的多维评分结果，schema: {"agent": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "model": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "coding": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "multi": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "eval": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "infra": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "data": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "security": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}} */
+  scores: Record<string, unknown>;
 }
 // ---- end:ai_article_scoring_1 ----
 

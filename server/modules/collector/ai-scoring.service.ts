@@ -3,16 +3,28 @@ import { CapabilityService } from '@lark-apaas/fullstack-nestjs-core';
 import type {
   AiArticleScoringOneInput,
   AiArticleScoringOneOutput,
-  AllDirectionScores,
-  DirectionScores,
-  ScoringDirection,
 } from '@shared/plugin-types';
+
+type ScoringDirection =
+  | 'agent' | 'model' | 'coding' | 'multi'
+  | 'eval' | 'infra' | 'data' | 'security';
+
+interface DirectionScores {
+  novelty: number;
+  depth: number;
+  impact: number;
+  authority: number;
+  timeliness: number;
+}
+
+type AllDirectionScores = Record<ScoringDirection, DirectionScores>;
 
 /** AI 打分结果 */
 export interface ArticleScoringResult {
   summary: string;
   scores: Record<string, DirectionScores>;
   aiProcessed: boolean;
+  degradeReason: string | null;
 }
 
 const SCORING_PLUGIN_INSTANCE_ID = 'ai_article_scoring_1';
@@ -108,13 +120,17 @@ export class AiScoringService {
     try {
       return await this.aiScore(title, content, sourceTier);
     } catch (error: unknown) {
-      const errMsg = error instanceof Error
-        ? error.message
-        : String(error);
+      const errType = error instanceof Error ? error.constructor.name : typeof error;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const errStack = error instanceof Error && error.stack
+        ? error.stack.slice(0, 500)
+        : '';
+      const degradeReason = `[${errType}] ${errMsg}${errStack ? '\n' + errStack : ''}`;
       this.logger.warn(
-        `AI scoring failed for "${title}", falling back to rule-based: ${errMsg}`,
+        `AI scoring failed for "${title}", falling back to rule-based: ${degradeReason}`,
       );
-      return this.ruleBasedScore(title, content, sourceTier);
+      const fallback = this.ruleBasedScore(title, content, sourceTier);
+      return { ...fallback, degradeReason };
     }
   }
 
@@ -171,7 +187,8 @@ export class AiScoringService {
     const scores: Partial<AllDirectionScores> = {};
 
     for (const dir of ALL_DIRECTIONS) {
-      const dirScores = raw.scores?.[dir];
+      const rawDirScores: unknown = raw.scores?.[dir];
+      const dirScores = rawDirScores as Record<string, unknown> | null | undefined;
       if (dirScores && typeof dirScores === 'object') {
         scores[dir] = {
           novelty: this.clampScore(dirScores.novelty),
@@ -189,13 +206,14 @@ export class AiScoringService {
       summary: raw.summary,
       scores: scores as AllDirectionScores,
       aiProcessed: true,
+      degradeReason: null,
     };
   }
 
   /**
    * 将分值限制在 0-20 区间
    */
-  private clampScore(value: number | undefined): number {
+  private clampScore(value: unknown): number {
     if (typeof value !== 'number' || Number.isNaN(value)) {
       return 0;
     }
@@ -254,6 +272,7 @@ export class AiScoringService {
       summary,
       scores: scores as AllDirectionScores,
       aiProcessed: false,
+      degradeReason: null,
     };
   }
 

@@ -211,6 +211,7 @@ export class ArticleService {
         primaryScore: article.primaryScore,
         status: article.status,
         aiProcessed: article.aiProcessed,
+        aiDegradeReason: article.aiDegradeReason,
         collectedAt: article.collectedAt,
       })
       .from(article)
@@ -233,6 +234,7 @@ export class ArticleService {
       primaryScore: row.primaryScore,
       status: row.status as ArticleStatus,
       aiProcessed: row.aiProcessed,
+      aiDegradeReason: row.aiDegradeReason,
       collectedAt: row.collectedAt.toISOString(),
     }));
 

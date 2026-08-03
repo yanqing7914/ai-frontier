@@ -12,7 +12,13 @@ import { getWorkbenchArticles, getArticleScores } from '@client/src/api/article'
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@client/src/components/ui/tooltip';
 import type {
   WorkbenchArticleItem,
   DirectionScoreItem,
@@ -268,11 +274,34 @@ const WorkbenchScoreTab = () => {
                         </Badge>
                       </td>
                       <td className="py-3 px-4">
-                        <Badge
-                          variant={article.aiProcessed ? 'default' : 'secondary'}
-                        >
-                          {article.aiProcessed ? '已处理' : '未处理'}
-                        </Badge>
+                        {article.aiProcessed ? (
+                          <Badge variant="default">AI 已处理</Badge>
+                        ) : (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="secondary"
+                                  className="gap-1 cursor-help"
+                                >
+                                  <AlertTriangle className="size-3" />
+                                  AI 降级
+                                </Badge>
+                              </TooltipTrigger>
+                              {article.aiDegradeReason && (
+                                <TooltipContent
+                                  side="bottom"
+                                  className="max-w-xs text-xs"
+                                >
+                                  <p className="font-medium mb-1">降级原因：</p>
+                                  <p className="whitespace-pre-wrap break-words">
+                                    {article.aiDegradeReason}
+                                  </p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-muted-foreground">
                         {dayjs(article.collectedAt).format('MM-DD HH:mm')}
