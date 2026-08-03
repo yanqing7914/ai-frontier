@@ -23,6 +23,19 @@ function runCommand(command, args) {
   });
 }
 
+// 串行依次执行每个任务，全部跑完后再聚合退出码：
+// 降低并发资源占用、让各任务输出按顺序清晰可读，同时保留“一次暴露所有 lint 问题”的行为。
+async function runTasksSerially(taskSpecs) {
+  let exitCode = 0;
+  for (const [command, args] of taskSpecs) {
+    const code = await runCommand(command, args);
+    if (code !== 0) {
+      exitCode = 1;
+    }
+  }
+  return exitCode;
+}
+
 function normalizeProjectFile(filePath) {
   const absolutePath = path.isAbsolute(filePath)
     ? filePath
@@ -64,13 +77,13 @@ function isStylelintTarget(filePath) {
 }
 
 async function runDefaultLint() {
-  const code = await runCommand(getBinName('npx'), [
-    'concurrently',
-    'npm run eslint',
-    'npm run type:check',
-    'npm run stylelint',
-  ]);
-  process.exit(code);
+  const taskSpecs = [
+    [getBinName('npm'), ['run', 'eslint']],
+    [getBinName('npm'), ['run', 'type:check']],
+    [getBinName('npm'), ['run', 'stylelint']],
+  ];
+
+  process.exit(await runTasksSerially(taskSpecs));
 }
 
 async function runSelectiveLint(inputFiles) {
@@ -101,31 +114,30 @@ async function runSelectiveLint(inputFiles) {
     }
   }
 
-  const tasks = [];
+  const taskSpecs = [];
 
   if (eslintFiles.length > 0) {
-    tasks.push(runCommand(getBinName('npx'), ['eslint', '--quiet', ...eslintFiles]));
+    taskSpecs.push([getBinName('npx'), ['eslint', '--quiet', ...eslintFiles]]);
   }
 
   if (stylelintFiles.length > 0) {
-    tasks.push(runCommand(getBinName('npx'), ['stylelint', '--quiet', ...stylelintFiles]));
+    taskSpecs.push([getBinName('npx'), ['stylelint', '--quiet', ...stylelintFiles]]);
   }
 
   if (clientTypeFiles.length > 0) {
-    tasks.push(runCommand(getBinName('npm'), ['run', 'type:check:client']));
+    taskSpecs.push([getBinName('npm'), ['run', 'type:check:client']]);
   }
 
   if (serverTypeFiles.length > 0) {
-    tasks.push(runCommand(getBinName('npm'), ['run', 'type:check:server']));
+    taskSpecs.push([getBinName('npm'), ['run', 'type:check:server']]);
   }
 
-  if (tasks.length === 0) {
+  if (taskSpecs.length === 0) {
     console.log('[lint] No supported files matched for lint');
     process.exit(0);
   }
 
-  const results = await Promise.all(tasks);
-  process.exit(results.some(code => code !== 0) ? 1 : 0);
+  process.exit(await runTasksSerially(taskSpecs));
 }
 
 async function main() {

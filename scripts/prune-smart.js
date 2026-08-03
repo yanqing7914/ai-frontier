@@ -6,14 +6,52 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const DIST_SERVER_DIR = path.join(ROOT_DIR, 'dist/server');
+
+// 加载提交的 .env，供读取构建期配置（如 MIAODA_RUNTIME_ENTRIES）。dotenv 不一定安装 → 静默降级。
+try {
+  require('dotenv').config({ path: path.join(ROOT_DIR, '.env') });
+} catch {
+  // dotenv 未安装：跳过；MIAODA_RUNTIME_ENTRIES 仍可来自真实环境变量
+}
+const DIST_DIR = path.join(ROOT_DIR, 'dist');
+const DIST_SERVER_DIR = path.join(DIST_DIR, 'server');
 const ROOT_PACKAGE_JSON = path.join(ROOT_DIR, 'package.json');
 const ROOT_NODE_MODULES = path.join(ROOT_DIR, 'node_modules');
-const OUT_NODE_MODULES = path.join(DIST_SERVER_DIR, 'node_modules');
-const OUT_PACKAGE_JSON = path.join(DIST_SERVER_DIR, 'package.json');
+const OUT_NODE_MODULES = path.join(DIST_DIR, 'node_modules');
+const OUT_PACKAGE_JSON = path.join(DIST_DIR, 'package.json');
 
 // Server 入口文件
 const SERVER_ENTRY = path.join(DIST_SERVER_DIR, 'main.js');
+
+// nest sourceRoot（源码根，默认 server）：把 .env 里声明的源码路径映射到构建产物位置
+let SOURCE_ROOT = 'server';
+try {
+  const nestCli = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'nest-cli.json'), 'utf8'));
+  if (nestCli.sourceRoot) SOURCE_ROOT = nestCli.sourceRoot;
+} catch {
+  // 读不到 nest-cli.json 则用默认 server
+}
+const SRC_TO_OUT_EXT = { '.mts': '.mjs', '.cts': '.cjs', '.ts': '.js' };
+
+// 额外 trace 入口：经 new Function/动态 import 加载、nft 无法从 main.js 静态发现的 ESM runtime。
+// 应用在提交的 .env 里用 MIAODA_RUNTIME_ENTRIES 声明【源码路径】（相对项目根，逗号分隔），例如：
+//   MIAODA_RUNTIME_ENTRIES=server/modules/ethics/runtime/review-run.mjs,server/modules/ethics/runtime/parse-core.mjs
+// 脚本按 nest sourceRoot 自动映射到 dist/server 下的构建产物（并重写 .mts→.mjs / .ts→.js）。
+const RUNTIME_ENTRIES = (process.env.MIAODA_RUNTIME_ENTRIES || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((srcRel) => {
+    const fromSrc = path.relative(SOURCE_ROOT, srcRel); // 去掉 sourceRoot 前缀
+    const ext = path.extname(fromSrc);
+    const outRel = SRC_TO_OUT_EXT[ext] ? fromSrc.slice(0, -ext.length) + SRC_TO_OUT_EXT[ext] : fromSrc;
+    return path.join(DIST_SERVER_DIR, outRel);
+  })
+  .filter((p) => {
+    if (fs.existsSync(p)) return true;
+    console.warn(`⚠️  MIAODA_RUNTIME_ENTRIES 入口在构建产物中不存在，已忽略: ${path.relative(ROOT_DIR, p)}`);
+    return false;
+  });
 
 // Node.js 内置模块列表
 const BUILTIN_MODULES = new Set([
@@ -144,12 +182,15 @@ async function smartPrune() {
   }
 
   console.log(`📂 分析入口文件: ${path.relative(ROOT_DIR, SERVER_ENTRY)}`);
+  if (RUNTIME_ENTRIES.length) {
+    console.log(`📎 额外 trace 入口 (${RUNTIME_ENTRIES.length}): ${RUNTIME_ENTRIES.map((p) => path.relative(DIST_SERVER_DIR, p)).join(', ')}`);
+  }
 
   // 2. 使用 @vercel/nft 追踪依赖
   console.log('🔎 追踪实际依赖...');
   const analyzeStart = Date.now();
 
-  const { fileList } = await nodeFileTrace([SERVER_ENTRY], {
+  const { fileList } = await nodeFileTrace([SERVER_ENTRY, ...RUNTIME_ENTRIES], {
     base: ROOT_DIR,
     processCwd: ROOT_DIR,
     ts: false, // 禁用 TS 解析
@@ -180,8 +221,59 @@ async function smartPrune() {
 
   console.log(`📦 静态分析需要 ${requiredPackages.size} 个 npm 包`);
 
-  // 4. 处理 actionPlugins（动态加载的插件，无法被静态分析追踪）
+  // 4. 从 nft 结果递归收集子依赖（处理动态 require 无法被静态分析追踪的问题）
+  // 某些包（如 pdf-parse）使用 try-catch 动态加载依赖（如 @napi-rs/canvas），
+  // @vercel/nft 无法追踪这类依赖，需要基于 package.json 声明补充
+  // 策略：只对 nft 已追踪到的包递归，避免收集无关依赖
   const originalPackage = JSON.parse(fs.readFileSync(ROOT_PACKAGE_JSON, 'utf8'));
+
+  let addedSubDeps = 0;
+  const visited = new Set(); // 防止循环依赖导致无限循环
+  const queue = [...requiredPackages]; // BFS 队列，从 nft 结果开始（更精准）
+
+  while (queue.length > 0) {
+    const depName = queue.shift();
+
+    // 跳过已访问的包（防止循环依赖）
+    if (visited.has(depName)) continue;
+    visited.add(depName);
+
+    const depPkgPath = path.join(ROOT_NODE_MODULES, depName, 'package.json');
+    if (!fs.existsSync(depPkgPath)) continue;
+
+    try {
+      const depPkg = JSON.parse(fs.readFileSync(depPkgPath, 'utf8'));
+      const subDeps = {
+        ...depPkg.dependencies,
+        ...depPkg.optionalDependencies,
+      };
+
+      for (const subDep of Object.keys(subDeps)) {
+        // 检查包是否存在于 node_modules 中
+        const subDepPath = path.join(ROOT_NODE_MODULES, subDep);
+        if (!fs.existsSync(subDepPath)) continue;
+
+        // 如果是新发现的包，添加到结果集并加入队列继续遍历
+        if (!requiredPackages.has(subDep)) {
+          requiredPackages.add(subDep);
+          addedSubDeps++;
+        }
+
+        // 无论是否已在 requiredPackages 中，都需要继续遍历其子依赖
+        if (!visited.has(subDep)) {
+          queue.push(subDep);
+        }
+      }
+    } catch {
+      // 忽略解析错误
+    }
+  }
+
+  if (addedSubDeps > 0) {
+    console.log(`📦 递归补充动态依赖，新增 ${addedSubDeps} 个包`);
+  }
+
+  // 5. 处理 actionPlugins（动态加载的插件，无法被静态分析追踪）
   const actionPlugins = originalPackage.actionPlugins || {};
   const actionPluginNames = Object.keys(actionPlugins);
 
@@ -212,7 +304,7 @@ async function smartPrune() {
 
   console.log(`📦 总共需要 ${requiredPackages.size} 个 npm 包\n`);
 
-  // 5. 选择性复制包（只复制需要的）
+  // 6. 选择性复制包（只复制需要的）
   console.log('📋 选择性复制 node_modules（仅复制需要的包）...');
   const copyStart = Date.now();
 
@@ -224,7 +316,7 @@ async function smartPrune() {
   console.log(`   成功: ${copiedCount.success} 个包，失败: ${copiedCount.failed} 个`);
   console.log(`   硬链接: ${fileStats.hardLinks} 个文件，复制: ${fileStats.copies} 个文件\n`);
 
-  // 6. 生成精简版 package.json
+  // 7. 生成精简版 package.json
   // 优化：直接构建 dependencies，避免多次对象展开
   const prunedDependencies = {};
   const allDeps = originalPackage.dependencies || {};
@@ -243,9 +335,6 @@ async function smartPrune() {
     version: originalPackage.version,
     private: true,
     dependencies: prunedDependencies,
-    scripts: {
-      start: originalPackage.scripts?.start || 'node main.js'
-    },
     engines: originalPackage.engines
   };
 
@@ -253,7 +342,7 @@ async function smartPrune() {
 
   const totalElapsed = Date.now() - totalStartTime;
 
-  // 7. 输出统计信息
+  // 8. 输出统计信息
   console.log('='.repeat(60));
   console.log('📊 智能裁剪统计:');
   console.log('='.repeat(60));

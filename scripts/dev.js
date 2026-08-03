@@ -59,10 +59,23 @@ function timestamp() {
   );
 }
 
-/** Write to terminal + dev.std.log */
+// Cap pending async stdout writes so a stalled pty consumer can't grow memory unbounded.
+// Each pending fs.write retains ~1.5 KB (msg + libuv/V8 wrappers); 1000 ≈ ~1.5 MB ceiling.
+let _stdoutInFlight = 0;
+const STDOUT_MAX_INFLIGHT = 1000;
+
+/** Write to dev.std.log (sync, guaranteed) + mirror to terminal (async, non-blocking) */
 function writeOutput(msg) {
-  try { process.stdout.write(msg); } catch {}
+  // File first and synchronously — read-logs reads this file; it must never be gated
+  // by the terminal consumer.
   try { fs.writeSync(devStdLogFd, msg); } catch {}
+  // stdout mirror via async fs.write: if process.stdout is a pty/pipe whose consumer
+  // stalls, the block happens on the libuv threadpool, NOT the event loop — so the
+  // synchronous log-FILE writes above (and subsequent readline callbacks) keep running.
+  // Drop overflow when too many writes are already pending (best-effort mirror).
+  if (_stdoutInFlight >= STDOUT_MAX_INFLIGHT) { return; }
+  _stdoutInFlight++;
+  try { fs.write(1, msg, () => { _stdoutInFlight--; }); } catch { _stdoutInFlight--; }
 }
 
 /** Structured event log → terminal + dev.std.log + dev.log */
