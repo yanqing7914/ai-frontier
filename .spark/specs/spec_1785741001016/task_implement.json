@@ -117,7 +117,7 @@
       "id": 5,
       "name": "信息源模块开发（含前后端）",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 coding-guide skill 确认后端 MVCS 与前端组件规范",
         "开发 feed-source 模块后端（Module/Controller/Service/DTO），实现信息源 CRUD、启用禁用切换、健康指标计算（成功率=success_fetches/total_fetches）",
@@ -148,13 +148,14 @@
         2,
         3
       ],
-      "beginTime": 1785742067765
+      "beginTime": 1785742067765,
+      "endTime": 1785742315869
     },
     {
       "id": 6,
       "name": "文章查询服务与阅读端页面开发（含前后端）",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 coding-guide skill 确认 API 规范与前端组件规范",
         "开发 article 模块后端（Module/Controller/Service），实现热点列表 API（status=published 分页+方向筛选+总分降序+聚类计数）、工作台概览统计、工作台文章列表（全状态分页筛选排序）、单条 8 方向打分明细查询、溯源链路查询",
@@ -202,7 +203,8 @@
         2,
         3,
         5
-      ]
+      ],
+      "beginTime": 1785742316138
     },
     {
       "id": 7,
