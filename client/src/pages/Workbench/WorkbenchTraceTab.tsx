@@ -11,7 +11,22 @@ import { Empty, EmptyTitle, EmptyDescription } from '@client/src/components/ui/e
 import { getTraceList } from '@client/src/api/article';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
-import type { ArticleTrace } from '@shared/api.interface';
+import type { ArticleTrace, TraceStatus } from '@shared/api.interface';
+
+const STATUS_MAP: Record<TraceStatus, { label: string; className: string }> = {
+  success: {
+    label: '溯源成功',
+    className: 'bg-[hsl(150_60%_40%)] text-white border-transparent',
+  },
+  failed: {
+    label: '溯源失败',
+    className: 'bg-[hsl(5_70%_50%)] text-white border-transparent',
+  },
+  not_needed: {
+    label: '无需溯源',
+    className: 'bg-[hsl(220_12%_50%)] text-white border-transparent',
+  },
+};
 
 const WorkbenchTraceTab = () => {
   const [items, setItems] = useState<ArticleTrace[]>([]);
@@ -21,7 +36,7 @@ const WorkbenchTraceTab = () => {
   const fetchData = useCallback(() => {
     setLoading(true);
     const params: Record<string, string> = {};
-    if (filter !== 'all') params.traced = filter === 'traced' ? 'true' : 'false';
+    if (filter !== 'all') params.traceStatus = filter;
     getTraceList(params)
       .then((data: { items: ArticleTrace[] }) => setItems(data.items))
       .catch((err: unknown) => {
@@ -44,8 +59,9 @@ const WorkbenchTraceTab = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="traced">已溯源</SelectItem>
-            <SelectItem value="untraced">未溯源</SelectItem>
+            <SelectItem value="success">溯源成功</SelectItem>
+            <SelectItem value="failed">溯源失败</SelectItem>
+            <SelectItem value="not_needed">无需溯源</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -65,39 +81,38 @@ const WorkbenchTraceTab = () => {
             <thead>
               <tr className="border-b border-border bg-accent/30">
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">标题</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">来源URL</th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">发现地址</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">原始出处</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">溯源状态</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item: ArticleTrace) => (
-                <tr
-                  key={item.articleId}
-                  className="border-b border-border hover:bg-accent/50"
-                >
-                  <td className="py-3 px-4 truncate max-w-[200px]">
-                    {item.title}
-                  </td>
-                  <td className="py-3 px-4 truncate max-w-[200px] font-mono text-xs text-muted-foreground">
-                    {item.url}
-                  </td>
-                  <td className="py-3 px-4 truncate max-w-[200px] font-mono text-xs text-muted-foreground">
-                    {item.originalUrl ?? '-'}
-                  </td>
-                  <td className="py-3 px-4">
-                    {item.traced ? (
-                      <Badge className="bg-[hsl(150_60%_40%)] text-white border-transparent">
-                        已溯源
+              {items.map((item: ArticleTrace) => {
+                const statusCfg = STATUS_MAP[item.traceStatus];
+                return (
+                  <tr
+                    key={item.articleId}
+                    className="border-b border-border hover:bg-accent/50"
+                  >
+                    <td className="py-3 px-4 truncate max-w-[200px]">
+                      {item.title}
+                    </td>
+                    <td className="py-3 px-4 truncate max-w-[200px] font-mono text-xs text-muted-foreground">
+                      {item.url}
+                    </td>
+                    <td className="py-3 px-4 truncate max-w-[200px] font-mono text-xs text-muted-foreground">
+                      {item.originalUrl && item.originalUrl !== item.url
+                        ? item.originalUrl
+                        : '-'}
+                    </td>
+                    <td className="py-3 px-4">
+                      <Badge className={statusCfg.className}>
+                        {statusCfg.label}
                       </Badge>
-                    ) : (
-                      <Badge className="bg-[hsl(35_85%_55%)] text-white border-transparent">
-                        未溯源
-                      </Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

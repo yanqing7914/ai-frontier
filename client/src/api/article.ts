@@ -66,7 +66,7 @@ export async function getQualityGates(params: {
 export async function getTraceList(params: {
   page?: number;
   pageSize?: number;
-  traced?: string;
+  traceStatus?: string;
 }): Promise<PaginatedResponse<ArticleTrace>> {
   const res = await axiosForBackend.get('/api/workbench/trace', { params });
   return res.data as PaginatedResponse<ArticleTrace>;

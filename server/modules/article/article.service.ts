@@ -17,6 +17,7 @@ import {
 } from 'drizzle-orm';
 import {
   article,
+  feedSource,
   directionScore,
   qualityGate,
   appConfig,
@@ -33,7 +34,9 @@ import type {
   Direction,
   ArticleStatus,
   QualityGateReason,
+  TraceStatus,
 } from '@shared/api.interface';
+import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
 
 @Injectable()
 export class ArticleService {
@@ -275,8 +278,10 @@ export class ArticleService {
         url: article.url,
         originalUrl: article.originalUrl,
         sourceName: article.sourceName,
+        tier: feedSource.tier,
       })
       .from(article)
+      .leftJoin(feedSource, eq(article.feedSourceId, feedSource.id))
       .where(eq(article.id, id))
       .limit(1);
 
@@ -285,13 +290,23 @@ export class ArticleService {
     }
 
     const row = rows[0];
+    const hasOrigin = row.originalUrl !== null
+      && row.originalUrl !== ''
+      && row.originalUrl !== row.url;
+    const needsTrace = row.tier === 'signal'
+      || isSecondHandDomain(getDomain(row.url));
+    const traceStatus: TraceStatus = hasOrigin
+      ? 'success'
+      : needsTrace ? 'failed' : 'not_needed';
+
     return {
       articleId: row.id,
       title: row.title,
       url: row.url,
       originalUrl: row.originalUrl,
       sourceName: row.sourceName,
-      traced: row.originalUrl !== null && row.originalUrl !== '',
+      traced: hasOrigin,
+      traceStatus,
     };
   }
 
@@ -348,23 +363,9 @@ export class ArticleService {
   async getTraceList(params: {
     page: number;
     pageSize: number;
-    traced?: boolean;
+    traceStatus?: TraceStatus;
   }): Promise<PaginatedResponse<ArticleTrace>> {
-    const { page, pageSize, traced } = params;
-    const offset = (page - 1) * pageSize;
-
-    let whereClause;
-    if (traced === true) {
-      whereClause = and(
-        isNotNull(article.originalUrl),
-        ne(article.originalUrl, ''),
-      );
-    } else if (traced === false) {
-      whereClause = or(
-        isNull(article.originalUrl),
-        eq(article.originalUrl, ''),
-      );
-    }
+    const { page, pageSize, traceStatus } = params;
 
     const rows = await this.db
       .select({
@@ -373,27 +374,40 @@ export class ArticleService {
         url: article.url,
         originalUrl: article.originalUrl,
         sourceName: article.sourceName,
+        tier: feedSource.tier,
       })
       .from(article)
-      .where(whereClause)
-      .orderBy(desc(article.collectedAt))
-      .limit(pageSize)
-      .offset(offset);
+      .leftJoin(feedSource, eq(article.feedSourceId, feedSource.id))
+      .orderBy(desc(article.collectedAt));
 
-    const totalResult = await this.db
-      .select({ count: count() })
-      .from(article)
-      .where(whereClause);
-    const total = Number(totalResult[0]?.count ?? 0);
+    const allItems: ArticleTrace[] = rows.map((row) => {
+      const hasOrigin = row.originalUrl !== null
+        && row.originalUrl !== ''
+        && row.originalUrl !== row.url;
+      const needsTrace = row.tier === 'signal'
+        || isSecondHandDomain(getDomain(row.url));
+      const status: TraceStatus = hasOrigin
+        ? 'success'
+        : needsTrace ? 'failed' : 'not_needed';
 
-    const items: ArticleTrace[] = rows.map((row) => ({
-      articleId: row.id,
-      title: row.title,
-      url: row.url,
-      originalUrl: row.originalUrl,
-      sourceName: row.sourceName,
-      traced: row.originalUrl !== null && row.originalUrl !== '',
-    }));
+      return {
+        articleId: row.id,
+        title: row.title,
+        url: row.url,
+        originalUrl: row.originalUrl,
+        sourceName: row.sourceName,
+        traced: hasOrigin,
+        traceStatus: status,
+      };
+    });
+
+    const filtered = traceStatus
+      ? allItems.filter((item: ArticleTrace) => item.traceStatus === traceStatus)
+      : allItems;
+
+    const total = filtered.length;
+    const offset = (page - 1) * pageSize;
+    const items = filtered.slice(offset, offset + pageSize);
 
     return { items, total };
   }

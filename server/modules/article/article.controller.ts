@@ -8,6 +8,7 @@ import type {
   ArticleTrace,
   QualityGateItem,
   PaginatedResponse,
+  TraceStatus,
 } from '@shared/api.interface';
 
 @Controller('api')
@@ -75,16 +76,18 @@ export class ArticleController {
   async getTraceList(
     @Query('page') page: string,
     @Query('pageSize') pageSize: string,
-    @Query('traced') traced?: string,
+    @Query('traceStatus') traceStatus?: string,
   ): Promise<PaginatedResponse<ArticleTrace>> {
     const parsedPage = parseInt(page, 10) || 1;
     const parsedPageSize = parseInt(pageSize, 10) || 20;
-    const tracedBool =
-      traced === undefined ? undefined : traced === 'true';
+    const validStatuses: TraceStatus[] = ['success', 'failed', 'not_needed'];
+    const status = traceStatus && validStatuses.includes(traceStatus as TraceStatus)
+      ? (traceStatus as TraceStatus)
+      : undefined;
     return this.articleService.getTraceList({
       page: parsedPage,
       pageSize: parsedPageSize,
-      traced: tracedBool,
+      traceStatus: status,
     });
   }
 
