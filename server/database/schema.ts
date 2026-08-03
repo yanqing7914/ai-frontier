@@ -1,7 +1,7 @@
 /* eslint-disable */
 /** auto generated, do not edit */
-import { customType } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
+import { sql } from 'drizzle-orm';
+import { boolean, date, foreignKey, index, integer, jsonb, pgTable, text, uniqueIndex, uuid, varchar, customType } from "drizzle-orm/pg-core"
 
 export const customTimestamptz = customType<{
   data: Date;
@@ -117,3 +117,196 @@ export const fileAttachmentArray = customType<{
   },
 });
 
+export const appConfig = pgTable("app_config", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  key: varchar("key", { length: 255 }).notNull().unique(),
+  /**
+   * @type any
+   */
+  value: jsonb("value").notNull().default('{}'),
+  description: varchar("description", { length: 500 }),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  uniqueIndex("app_config_key_key").on(table.key),
+]);
+
+export const dailyDigest = pgTable("daily_digest", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  digestDate: date("digest_date").notNull().unique(),
+  summary: text("summary"),
+  articleCount: integer("article_count").notNull().default(0),
+  /**
+   * @type string[]
+   */
+  articleIds: jsonb("article_ids").notNull().default('[]'),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  uniqueIndex("daily_digest_digest_date_key").on(table.digestDate),
+]);
+
+export const reviewItem = pgTable("review_item", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleId: uuid("article_id").notNull(),
+  status: varchar("status", { length: 50 }).notNull().default('pending'),
+  reviewedAt: customTimestamptz("reviewed_at", { precision: 3 }),
+  reviewNote: text("review_note"),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  index("idx_review_item_status").on(table.status),
+  foreignKey({
+    columns: [table.articleId],
+    foreignColumns: [article.id],
+    name: "review_item_article_id_fkey",
+  }).onDelete("cascade"),
+]);
+
+export const qualityGate = pgTable("quality_gate", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleId: uuid("article_id").notNull(),
+  reason: varchar("reason", { length: 50 }).notNull(),
+  detail: text("detail"),
+  blockedAt: customTimestamptz("blocked_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  index("idx_quality_gate_article_id").on(table.articleId),
+  foreignKey({
+    columns: [table.articleId],
+    foreignColumns: [article.id],
+    name: "quality_gate_article_id_fkey",
+  }).onDelete("cascade"),
+]);
+
+export const directionScore = pgTable("direction_score", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleId: uuid("article_id").notNull(),
+  direction: varchar("direction", { length: 50 }).notNull(),
+  /**
+   * @type { novelty: number; depth: number; impact: number; authority: number; timeliness: number }
+   */
+  dimensionScores: jsonb("dimension_scores").notNull().default('{}'),
+  totalScore: integer("total_score").notNull().default(0),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  index("idx_direction_score_article_id").on(table.articleId),
+  foreignKey({
+    columns: [table.articleId],
+    foreignColumns: [article.id],
+    name: "direction_score_article_id_fkey",
+  }).onDelete("cascade"),
+]);
+
+export const article = pgTable("article", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: varchar("title", { length: 500 }).notNull(),
+  url: varchar("url", { length: 2048 }).notNull(),
+  originalUrl: varchar("original_url", { length: 2048 }),
+  contentHash: varchar("content_hash", { length: 64 }).notNull(),
+  summary: text("summary"),
+  sourceName: varchar("source_name", { length: 255 }).notNull(),
+  feedSourceId: uuid("feed_source_id"),
+  publishedAt: customTimestamptz("published_at", { precision: 3 }),
+  collectedAt: customTimestamptz("collected_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  clusterId: varchar("cluster_id", { length: 64 }),
+  status: varchar("status", { length: 50 }).notNull().default('draft'),
+  primaryDirection: varchar("primary_direction", { length: 50 }),
+  primaryScore: integer("primary_score"),
+  aiProcessed: boolean("ai_processed").notNull().default(false),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+}, (table) => [
+  index("idx_article_status").on(table.status),
+  index("idx_article_content_hash").on(table.contentHash),
+  index("idx_article_cluster_id").on(table.clusterId),
+  index("idx_article_primary_direction").on(table.primaryDirection),
+  foreignKey({
+    columns: [table.feedSourceId],
+    foreignColumns: [feedSource.id],
+    name: "article_feed_source_id_fkey",
+  }),
+]);
+
+export const feedSource = pgTable("feed_source", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 255 }).notNull(),
+  url: varchar("url", { length: 1024 }).notNull(),
+  tier: varchar("tier", { length: 50 }).notNull().default('signal'),
+  feedType: varchar("feed_type", { length: 50 }).notNull().default('rss'),
+  enabled: boolean("enabled").notNull().default(true),
+  totalFetches: integer("total_fetches").notNull().default(0),
+  successFetches: integer("success_fetches").notNull().default(0),
+  lastSuccessAt: customTimestamptz("last_success_at", { precision: 3 }),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastError: text("last_error"),
+  // System field: Creation time (auto-filled, do not modify)
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Creator (auto-filled, do not modify)
+  createdBy: userProfile("_created_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+  // System field: Update time (auto-filled, do not modify)
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  // System field: Updater (auto-filled, do not modify)
+  updatedBy: userProfile("_updated_by").default(sql`CASE
+    WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
+});
+
+// table aliases
+export const appConfigTable = appConfig;
+export const articleTable = article;
+export const dailyDigestTable = dailyDigest;
+export const directionScoreTable = directionScore;
+export const feedSourceTable = feedSource;
+export const qualityGateTable = qualityGate;
+export const reviewItemTable = reviewItem;

@@ -1,0 +1,43 @@
+{
+  "id": "ai_article_scoring_1",
+  "pluginKey": "@official-plugins/ai-text-to-json",
+  "pluginVersion": "1.0.24",
+  "name": "AI资讯文章打分插件",
+  "description": "对输入的AI资讯文章生成摘要和8个方向的多维度评分，输出结构化JSON结果",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "article_text": {
+        "type": "string",
+        "description": "文章标题和内容的组合文本"
+      }
+    },
+    "required": [
+      "article_text"
+    ]
+  },
+  "formValue": {
+    "modelID": "2015",
+    "modelParams": {
+      "temperature": 0.5,
+      "maxTokens": 8192
+    },
+    "prompt": "你是一位专业的AI领域内容分析专家。请对以下AI资讯文章进行分析：\n{{input.article_text}}\n\n分析要求：\n1. 首先生成文章的核心摘要，准确概括文章的主要内容、核心观点和关键信息\n2. 从以下8个方向对文章进行评分，每个方向包含5个维度，每个维度分值为0-20的整数，总分100分\n   - agent方向（智能体相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - model方向（大模型相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - coding方向（编程开发相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - multi方向（多模态相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - eval方向（评估评测相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - infra方向（基础设施相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - data方向（数据相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n   - security方向（安全相关内容）：新颖性(novelty)、深度(depth)、影响力(impact)、权威性(authority)、时效性(timeliness)\n3. 评分标准：\n   - 0分：该方向没有相关内容\n   - 1-10分：相关内容质量较低，信息价值有限\n   - 11-20分：相关内容质量较高，具有较好的参考价值\n4. 只输出符合要求的JSON结构，不要其他额外内容",
+    "jsonStructure": [
+      {
+        "paramType": "String",
+        "paramDescription": "文章核心摘要，准确概括文章主要内容、核心观点和关键信息",
+        "name": "summary"
+      },
+      {
+        "name": "scores",
+        "paramType": "Object",
+        "paramDescription": "8个方向的多维评分结果，schema: {\"agent\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"model\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"coding\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"multi\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"eval\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"infra\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"data\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}, \"security\": {\"novelty\": number, \"depth\": number, \"impact\": number, \"authority\": number, \"timeliness\": number}}"
+      }
+    ]
+  },
+  "createdAt": 1785741789354,
+  "updatedAt": 1785741789354,
+  "createdBy": 7618398883458124756
+}

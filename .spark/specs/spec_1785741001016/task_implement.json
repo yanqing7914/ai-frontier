@@ -60,7 +60,7 @@
       "id": 3,
       "name": "数据库表创建与预置数据",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 sql skill，规划 7 张表的建表顺序（feed_source → article → direction_score → quality_gate → review_item → daily_digest → app_config）",
         "逐表执行 DDL 建表语句，每表完成后重新读取 schema.ts 确认字段",
@@ -78,13 +78,14 @@
       "dependencies": [
         2
       ],
-      "beginTime": 1785741703408
+      "beginTime": 1785741703408,
+      "endTime": 1785742066400
     },
     {
       "id": 4,
       "name": "插件实例创建与调用代码生成",
       "type": "normal",
-      "status": "in_progress",
+      "status": "completed",
       "subtasks": [
         "读取 plugin-guide skill，确认插件集成规范与服务端调用方式",
         "调用 plugin_instance 工具创建 article-ai-scoring 插件实例（基于 ai-text-to-json，用于文章摘要生成与 8 方向多维评分）",
@@ -109,13 +110,14 @@
       "dependencies": [
         2
       ],
-      "beginTime": 1785741703408
+      "beginTime": 1785741703408,
+      "endTime": 1785742066400
     },
     {
       "id": 5,
       "name": "信息源模块开发（含前后端）",
       "type": "normal",
-      "status": "pending",
+      "status": "in_progress",
       "subtasks": [
         "读取 coding-guide skill 确认后端 MVCS 与前端组件规范",
         "开发 feed-source 模块后端（Module/Controller/Service/DTO），实现信息源 CRUD、启用禁用切换、健康指标计算（成功率=success_fetches/total_fetches）",
@@ -145,7 +147,8 @@
       "dependencies": [
         2,
         3
-      ]
+      ],
+      "beginTime": 1785742067765
     },
     {
       "id": 6,
