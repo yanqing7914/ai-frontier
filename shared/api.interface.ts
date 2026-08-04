@@ -1,6 +1,25 @@
 export type Tier = 'authoritative' | 'validation' | 'signal';
 export type FeedType = 'rss' | 'atom' | 'web';
-export type Direction = 'agent' | 'model' | 'coding' | 'multi' | 'eval' | 'infra' | 'data' | 'security';
+export type Direction =
+  | 'model' | 'agent' | 'multimodal' | 'coding'
+  | 'infrastructure' | 'data_eval' | 'safety_governance'
+  | 'applications' | 'business_ecosystem';
+
+export type LegacyDirection = 'multi' | 'infra' | 'eval' | 'data' | 'security';
+
+export const LEGACY_DIRECTION_MAP: Record<string, Direction> = {
+  multi: 'multimodal',
+  infra: 'infrastructure',
+  eval: 'data_eval',
+  data: 'data_eval',
+  security: 'safety_governance',
+};
+
+export const ALL_DIRECTIONS: Direction[] = [
+  'model', 'agent', 'multimodal', 'coding',
+  'infrastructure', 'data_eval', 'safety_governance',
+  'applications', 'business_ecosystem',
+];
 export type ArticleStatus = 'published' | 'draft' | 'blocked' | 'pending_review';
 export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable' | 'same_url' | 'same_title' | 'same_batch_url' | 'same_batch_title' | 'source_unreliable';
 export type ReviewStatus = 'pending' | 'approved' | 'rejected';
@@ -17,6 +36,12 @@ export interface FeedSource {
   lastSuccessAt: string | null;
   consecutiveFailures: number;
   lastError: string | null;
+  sourceCategory: string | null;
+  sourceCategoryId: string | null;
+  region: string | null;
+  primaryDirectionId: string | null;
+  directionIds: string[];
+  sourceLayer: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +56,10 @@ export interface FeedSourceListItem {
   successRate: number;
   lastSuccessAt: string | null;
   consecutiveFailures: number;
+  sourceCategory: string | null;
+  sourceCategoryId: string | null;
+  primaryDirectionId: string | null;
+  sourceLayer: string | null;
 }
 
 export interface FeedSourceHealth {

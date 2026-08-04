@@ -6,6 +6,11 @@ import type {
 } from '@shared/plugin-types';
 
 type ScoringDirection =
+  | 'model' | 'agent' | 'multimodal' | 'coding'
+  | 'infrastructure' | 'data_eval' | 'safety_governance'
+  | 'applications' | 'business_ecosystem';
+
+type AiPluginDirection =
   | 'agent' | 'model' | 'coding' | 'multi'
   | 'eval' | 'infra' | 'data' | 'security';
 
@@ -31,9 +36,21 @@ const SCORING_PLUGIN_INSTANCE_ID = 'ai_article_scoring_1';
 const SCORING_ACTION_KEY = 'textToJson';
 
 const ALL_DIRECTIONS: ScoringDirection[] = [
-  'agent', 'model', 'coding', 'multi',
-  'eval', 'infra', 'data', 'security',
+  'model', 'agent', 'multimodal', 'coding',
+  'infrastructure', 'data_eval', 'safety_governance',
+  'applications', 'business_ecosystem',
 ];
+
+const AI_PLUGIN_TO_NEW: Record<AiPluginDirection, ScoringDirection> = {
+  model: 'model',
+  agent: 'agent',
+  coding: 'coding',
+  multi: 'multimodal',
+  eval: 'data_eval',
+  infra: 'infrastructure',
+  data: 'data_eval',
+  security: 'safety_governance',
+};
 
 const EMPTY_DIRECTION_SCORES: DirectionScores = {
   novelty: 0,
@@ -47,46 +64,53 @@ const EMPTY_DIRECTION_SCORES: DirectionScores = {
  * 各方向关键词映射，用于规则降级打分
  */
 const DIRECTION_KEYWORDS: Record<ScoringDirection, string[]> = {
+  model: [
+    'llm', '大模型', 'gpt', 'claude', 'gemini', 'llama',
+    'transformer', 'fine-tun', 'pretrain', 'pre-train',
+    'foundation model', '语言模型', 'language model', 'scaling',
+  ],
   agent: [
     'agent', 'agents', '智能体', 'autonomous', 'agentic',
     'tool use', 'tool-use', 'function calling', 'multi-agent',
     'planning', 'reasoning agent', 'agentic workflow',
   ],
-  model: [
-    'llm', '大模型', 'gpt', 'claude', 'gemini', 'llama',
-    'transformer', 'fine-tun', 'pretrain', 'pre-train',
-    'foundation model', '语言模型', 'language model', 'scaling',
+  multimodal: [
+    'multimodal', '多模态', 'vision', 'image', '视频',
+    'audio', 'speech', '图文', 'visual', '图片理解',
+    'image generation', '图像生成', '文生图', '图生图',
   ],
   coding: [
     'coding', 'code gen', 'copilot', '编程', '代码生成',
     'ide', 'developer tool', '代码补全', 'code completion',
     'debugging', 'refactor', '代码审查', 'code review',
   ],
-  multi: [
-    'multimodal', '多模态', 'vision', 'image', '视频',
-    'audio', 'speech', '图文', 'visual', '图片理解',
-    'image generation', '图像生成', '文生图', '图生图',
-  ],
-  eval: [
-    'benchmark', '评测', '评估', 'evaluation', 'leaderboard',
-    '排行榜', 'mmlu', 'humaneval', '测试集', 'metric',
-    'scoring', 'rating', '对比测试',
-  ],
-  infra: [
+  infrastructure: [
     'infrastructure', '基础设施', 'training cluster',
     '推理加速', 'inference', 'deployment', '部署',
     'gpu', 'tpu', '芯片', 'chip', '分布式', 'distributed',
     'kubernetes', 'serving', '推理框架',
   ],
-  data: [
+  data_eval: [
+    'benchmark', '评测', '评估', 'evaluation', 'leaderboard',
+    '排行榜', 'mmlu', 'humaneval', '测试集', 'metric',
     'data', '数据集', 'dataset', '数据标注', 'annotation',
-    '数据清洗', 'data pipeline', '数据治理', 'data quality',
-    '合成数据', 'synthetic data', '数据飞轮', 'embedding',
+    '数据清洗', 'data pipeline', '数据治理', 'embedding',
   ],
-  security: [
+  safety_governance: [
     'security', '安全', 'alignment', '对齐', 'red team',
     'jailbreak', '越狱', 'guardrail', '护栏', '隐私',
     'privacy', 'toxicity', '有害', '合规', 'compliance',
+    'governance', '治理', 'policy', 'regulation',
+  ],
+  applications: [
+    'application', '应用', 'product', '产品', 'enterprise',
+    '企业', 'saas', 'workflow', 'integration', '集成',
+    'platform', '平台', 'solution', '解决方案',
+  ],
+  business_ecosystem: [
+    'funding', '融资', 'acquisition', '收购', 'ipo',
+    'market', '市场', 'revenue', '营收', 'valuation',
+    '估值', 'partnership', '合作', 'ecosystem', '生态',
   ],
 };
 
@@ -185,21 +209,41 @@ export class AiScoringService {
     }
 
     const scores: Partial<AllDirectionScores> = {};
+    const mappedScores = new Map<ScoringDirection, DirectionScores>();
 
-    for (const dir of ALL_DIRECTIONS) {
-      const rawDirScores: unknown = raw.scores?.[dir];
+    const oldDirs: AiPluginDirection[] = [
+      'agent', 'model', 'coding', 'multi',
+      'eval', 'infra', 'data', 'security',
+    ];
+    for (const oldDir of oldDirs) {
+      const rawDirScores: unknown = raw.scores?.[oldDir];
       const dirScores = rawDirScores as Record<string, unknown> | null | undefined;
+      const newDir = AI_PLUGIN_TO_NEW[oldDir];
       if (dirScores && typeof dirScores === 'object') {
-        scores[dir] = {
+        const parsed: DirectionScores = {
           novelty: this.clampScore(dirScores.novelty),
           depth: this.clampScore(dirScores.depth),
           impact: this.clampScore(dirScores.impact),
           authority: this.clampScore(dirScores.authority),
           timeliness: this.clampScore(dirScores.timeliness),
         };
-      } else {
-        scores[dir] = { ...EMPTY_DIRECTION_SCORES };
+        if (newDir === 'data_eval' && mappedScores.has('data_eval')) {
+          const existing = mappedScores.get('data_eval')!;
+          mappedScores.set('data_eval', {
+            novelty: Math.max(existing.novelty, parsed.novelty),
+            depth: Math.max(existing.depth, parsed.depth),
+            impact: Math.max(existing.impact, parsed.impact),
+            authority: Math.max(existing.authority, parsed.authority),
+            timeliness: Math.max(existing.timeliness, parsed.timeliness),
+          });
+        } else {
+          mappedScores.set(newDir, parsed);
+        }
       }
+    }
+
+    for (const dir of ALL_DIRECTIONS) {
+      scores[dir] = mappedScores.get(dir) ?? { ...EMPTY_DIRECTION_SCORES };
     }
 
     return {

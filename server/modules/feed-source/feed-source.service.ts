@@ -60,6 +60,10 @@ export class FeedSourceService {
           successFetches: feedSource.successFetches,
           lastSuccessAt: feedSource.lastSuccessAt,
           consecutiveFailures: feedSource.consecutiveFailures,
+          sourceCategory: feedSource.sourceCategory,
+          sourceCategoryId: feedSource.sourceCategoryId,
+          primaryDirectionId: feedSource.primaryDirectionId,
+          sourceLayer: feedSource.sourceLayer,
         })
         .from(feedSource)
         .where(whereClause)
@@ -89,6 +93,10 @@ export class FeedSourceService {
         ? row.lastSuccessAt.toISOString()
         : null,
       consecutiveFailures: row.consecutiveFailures,
+      sourceCategory: row.sourceCategory ?? null,
+      sourceCategoryId: row.sourceCategoryId ?? null,
+      primaryDirectionId: row.primaryDirectionId ?? null,
+      sourceLayer: row.sourceLayer ?? null,
     }));
 
     return { items, total };

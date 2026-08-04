@@ -26,9 +26,18 @@ import * as crypto from 'crypto';
 import Parser from 'rss-parser';
 
 const DIRECTIONS = [
-  'agent', 'model', 'coding', 'multi',
-  'eval', 'infra', 'data', 'security',
+  'model', 'agent', 'multimodal', 'coding',
+  'infrastructure', 'data_eval', 'safety_governance',
+  'applications', 'business_ecosystem',
 ] as const;
+
+const LEGACY_DIRECTION_MAP: Record<string, string> = {
+  multi: 'multimodal',
+  infra: 'infrastructure',
+  eval: 'data_eval',
+  data: 'data_eval',
+  security: 'safety_governance',
+};
 
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;

@@ -315,6 +315,12 @@ export const feedSource = pgTable("feed_source", {
   lastSuccessAt: customTimestamptz("last_success_at", { precision: 3 }),
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   lastError: text("last_error"),
+  sourceCategory: varchar("source_category", { length: 100 }),
+  sourceCategoryId: varchar("source_category_id", { length: 100 }),
+  region: varchar("region", { length: 50 }).default('global'),
+  primaryDirectionId: varchar("primary_direction_id", { length: 50 }),
+  directionIds: text("direction_ids").array().default([]),
+  sourceLayer: varchar("source_layer", { length: 50 }),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)

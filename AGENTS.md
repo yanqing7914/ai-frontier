@@ -55,20 +55,22 @@
 | error      | hsl(5, 70%, 50%)   | 拦截/异常/失败，红色系                |
 | info       | hsl(220, 75%, 45%) | 等同 primary，用于草稿/中性状态提示   |
 
-### 2.4 8方向标签色板
+### 2.4 9方向标签色板
 
-> 从主色 H:220 出发，等距偏移生成8个低饱和色彩，饱和度统一 45-55%，明度统一 55-65%，确保视觉权重一致。
+> 从主色 H:220 出发，等距偏移生成9个低饱和色彩，饱和度统一 45-55%，明度统一 55-65%，确保视觉权重一致。
+> 旧方向兼容映射：multi→multimodal, infra→infrastructure, eval→data_eval, data→data_eval, security→safety_governance
 
-| 方向     | HSL 值            | 标签文字色              |
-| -------- | ----------------- | ----------------------- |
-| agent    | hsl(220, 50%, 58%) | hsl(220, 60%, 25%)      |
-| model    | hsl(265, 48%, 60%) | hsl(265, 55%, 28%)      |
-| coding   | hsl(170, 45%, 48%) | hsl(170, 55%, 22%)      |
-| multi    | hsl(310, 42%, 58%) | hsl(310, 50%, 28%)      |
-| eval     | hsl(45, 55%, 52%)  | hsl(45, 65%, 25%)       |
-| infra    | hsl(195, 50%, 50%) | hsl(195, 60%, 22%)      |
-| data     | hsl(130, 45%, 50%) | hsl(130, 55%, 22%)      |
-| security | hsl(0, 48%, 58%)   | hsl(0, 58%, 28%)        |
+| 方向                 | HSL 值            | 标签文字色              |
+| -------------------- | ----------------- | ----------------------- |
+| model                | hsl(265, 48%, 60%) | hsl(265, 55%, 28%)      |
+| agent                | hsl(220, 50%, 58%) | hsl(220, 60%, 25%)      |
+| multimodal           | hsl(310, 42%, 58%) | hsl(310, 50%, 28%)      |
+| coding               | hsl(170, 45%, 48%) | hsl(170, 55%, 22%)      |
+| infrastructure       | hsl(195, 50%, 50%) | hsl(195, 60%, 22%)      |
+| data_eval            | hsl(45, 55%, 52%)  | hsl(45, 65%, 25%)       |
+| safety_governance    | hsl(0, 48%, 58%)   | hsl(0, 58%, 28%)        |
+| applications         | hsl(150, 45%, 50%) | hsl(150, 55%, 22%)      |
+| business_ecosystem   | hsl(30, 50%, 52%)  | hsl(30, 60%, 25%)       |
 
 ## 3. Typography (字体排版)
 
@@ -86,7 +88,7 @@
 ## 5. Visual Language (视觉语言)
 
 - **形态参数**: 圆角 `rounded-sm (0.125rem)` · 阴影 `shadow-none`(卡片用 1px border 替代) · 间距基调 `compact`
-- **识别签名**: 「总分数字用 JetBrains Mono text-3xl font-bold + primary 色」「8方向标签统一胶囊形+各自方向色」「网格辅助线装饰(可选)」
+- **识别签名**: 「总分数字用 JetBrains Mono text-3xl font-bold + primary 色」「9方向标签统一胶囊形+各自方向色」「网格辅助线装饰(可选)」
 - **装饰策略**: 仅用 1px 网格线和方向标签色彩作为视觉锚点，不使用渐变/插画/图标装饰
 - **动效原则**: 状态切换即时响应 150ms ease-out；筛选/排序无页面跳转动画
 - **可及性**: 正文对比度 ≥ 4.5:1；方向标签文字色均经过 WCAG AA 校验；交互元素 focus-visible 用 primary ring 2px
@@ -96,6 +98,7 @@
 - **状态完整性**: Button/Input/Toggle/Badge 覆盖 Default/Hover/Focus/Active/Disabled；Focus 态用 `ring-2 ring-primary ring-offset-2`
 - **层级清晰**: Primary 按钮填充 `bg-primary`；Secondary/Ghost 用 `border-border hover:bg-accent`；总分数字永远是页面最大最醒目的数据元素
 - **一致性**: 所有标签(Badge)统一 `rounded-full px-2.5 py-0.5 text-xs font-medium`；表格行高统一 `h-12`；卡片内边距统一 `p-5`
+- **源分类体系**: feed_source 按 source_category 分为 8 大类：research_papers/official_releases/open_source_community/eval_data/infrastructure_industry/policy_safety/media_analysis/newsletters_podcasts
 - **数据展示**: 数字一律用 JetBrains Mono；百分比/分数右对齐；状态标签左对齐；URL 文本 `truncate` + tooltip 展开
 
 ## 7. Image Direction (图片与视觉资产，按需)

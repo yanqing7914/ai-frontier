@@ -23,14 +23,15 @@ dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
 const DIRECTIONS = [
-  { key: 'agent', label: '智能体', bg: 'hsl(220,50%,58%)', fg: 'hsl(220,60%,25%)' },
   { key: 'model', label: '模型', bg: 'hsl(265,48%,60%)', fg: 'hsl(265,55%,28%)' },
+  { key: 'agent', label: '智能体', bg: 'hsl(220,50%,58%)', fg: 'hsl(220,60%,25%)' },
+  { key: 'multimodal', label: '多模态', bg: 'hsl(310,42%,58%)', fg: 'hsl(310,50%,28%)' },
   { key: 'coding', label: '编程', bg: 'hsl(170,45%,48%)', fg: 'hsl(170,55%,22%)' },
-  { key: 'multi', label: '多模态', bg: 'hsl(310,42%,58%)', fg: 'hsl(310,50%,28%)' },
-  { key: 'eval', label: '评测', bg: 'hsl(45,55%,52%)', fg: 'hsl(45,65%,25%)' },
-  { key: 'infra', label: '基础设施', bg: 'hsl(195,50%,50%)', fg: 'hsl(195,60%,22%)' },
-  { key: 'data', label: '数据', bg: 'hsl(130,45%,50%)', fg: 'hsl(130,55%,22%)' },
-  { key: 'security', label: '安全', bg: 'hsl(0,48%,58%)', fg: 'hsl(0,58%,28%)' },
+  { key: 'infrastructure', label: '基础设施', bg: 'hsl(195,50%,50%)', fg: 'hsl(195,60%,22%)' },
+  { key: 'data_eval', label: '评测数据', bg: 'hsl(45,55%,52%)', fg: 'hsl(45,65%,25%)' },
+  { key: 'safety_governance', label: '安全治理', bg: 'hsl(0,48%,58%)', fg: 'hsl(0,58%,28%)' },
+  { key: 'applications', label: '应用', bg: 'hsl(150,45%,50%)', fg: 'hsl(150,55%,22%)' },
+  { key: 'business_ecosystem', label: '商业生态', bg: 'hsl(30,50%,52%)', fg: 'hsl(30,60%,25%)' },
 ] as const;
 
 const TodayHot = () => {
