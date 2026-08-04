@@ -15,6 +15,11 @@ export const LEGACY_DIRECTION_MAP: Record<string, Direction> = {
   security: 'safety_governance',
 };
 
+export function normalizeDirection(raw: string | null | undefined): Direction {
+  if (!raw) return 'agent';
+  return (LEGACY_DIRECTION_MAP[raw] ?? raw) as Direction;
+}
+
 export const ALL_DIRECTIONS: Direction[] = [
   'model', 'agent', 'multimodal', 'coding',
   'infrastructure', 'data_eval', 'safety_governance',

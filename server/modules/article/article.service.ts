@@ -39,12 +39,7 @@ import type {
   ExcludeReason,
 } from '@shared/api.interface';
 import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
-import { LEGACY_DIRECTION_MAP } from '@shared/api.interface';
-
-function normalizeDirection(raw: string | null | undefined): Direction {
-  if (!raw) return 'agent';
-  return (LEGACY_DIRECTION_MAP[raw] ?? raw) as Direction;
-}
+import { normalizeDirection } from '@shared/api.interface';
 
 @Injectable()
 export class ArticleService {
@@ -106,12 +101,14 @@ export class ArticleService {
             ...baseConditions,
             isNull(article.frontPageRank),
             gte(article.publishedAt, sevenDaysAgo),
+            gte(article.primaryScore, 75),
             sql`${article.id} NOT IN (${sql.join(rankedIds.map((id: string) => sql`${id}`), sql`, `)})`,
           )
         : and(
             ...baseConditions,
             isNull(article.frontPageRank),
             gte(article.publishedAt, sevenDaysAgo),
+            gte(article.primaryScore, 75),
           );
 
       const supplementRows = await this.db

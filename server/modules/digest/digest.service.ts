@@ -6,12 +6,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { dailyDigest, article } from '@server/database/schema';
 import type { DailyDigest, DailyDigestArticle, Direction } from '@shared/api.interface';
-import { LEGACY_DIRECTION_MAP } from '@shared/api.interface';
-
-function normalizeDirection(raw: string | null | undefined): Direction {
-  if (!raw) return 'agent';
-  return (LEGACY_DIRECTION_MAP[raw] ?? raw) as Direction;
-}
+import { normalizeDirection } from '@shared/api.interface';
 
 @Injectable()
 export class DigestService {
