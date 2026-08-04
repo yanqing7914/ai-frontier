@@ -24,6 +24,7 @@ import type {
   DirectionScoreItem,
   ArticleStatus,
   Direction,
+  ExcludeReason,
 } from '@shared/api.interface';
 
 const DIRECTIONS = [
@@ -50,6 +51,12 @@ const STATUS_MAP: Record<ArticleStatus, { label: string; className: string }> = 
   draft: { label: '草稿', className: 'bg-muted text-muted-foreground border-transparent' },
   blocked: { label: '已拦截', className: 'bg-[hsl(5_70%_50%)] text-white border-transparent' },
   pending_review: { label: '待审核', className: 'bg-[hsl(35_85%_55%)] text-white border-transparent' },
+};
+
+const EXCLUDE_REASON_MAP: Record<ExcludeReason, string> = {
+  source_cap: '源配额满',
+  direction_cap: '方向配额满',
+  limit_reached: '名额已满',
 };
 
 function getDirectionConfig(key: Direction) {
@@ -226,6 +233,7 @@ const WorkbenchScoreTab = () => {
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">主方向</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">总分</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态</th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">首页</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">AI</th>
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground">采集时间</th>
               </tr>
@@ -274,6 +282,17 @@ const WorkbenchScoreTab = () => {
                         </Badge>
                       </td>
                       <td className="py-3 px-4">
+                        {article.status === 'published' && !article.excludeReason ? (
+                          <Badge className="bg-[hsl(220_75%_45%)] text-white border-transparent text-[10px]">首页</Badge>
+                        ) : article.excludeReason ? (
+                          <Badge variant="outline" className="text-[10px] border-[hsl(35_85%_45%)] text-[hsl(35_85%_45%)]">
+                            {EXCLUDE_REASON_MAP[article.excludeReason]}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">-</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
                         {article.aiProcessed ? (
                           <Badge variant="default">AI 已处理</Badge>
                         ) : (
@@ -309,7 +328,7 @@ const WorkbenchScoreTab = () => {
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={7} className="bg-accent/10">
+                        <td colSpan={8} className="bg-accent/10">
                           <ScorePanel articleId={article.id} />
                         </td>
                       </tr>

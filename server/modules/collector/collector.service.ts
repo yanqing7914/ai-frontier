@@ -345,7 +345,10 @@ export class CollectorService {
       `Publish: ${publishedCount} articles published (threshold=${publishThreshold})`,
     );
 
-    // 10. Daily digest
+    // 10. Front page diversity selection
+    await this.selectForFrontPage();
+
+    // 11. Daily digest
     await this.ensureDigest(today);
 
     this.logger.log('Pipeline completed successfully');
@@ -657,64 +660,53 @@ export class CollectorService {
   ): Promise<{ alive: boolean; detail: string }> {
     if (!url) return { alive: true, detail: '' };
 
+    const UA = 'Mozilla/5.0 (compatible; AI-News-Bot/1.0)';
+
+    let status: number | null = null;
+    let errorDetail = '';
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
-
       const response = await fetch(url, {
         method: 'HEAD',
         redirect: 'follow',
         signal: controller.signal,
-        headers: {
-          'User-Agent': 'AI-News-Dashboard/1.0 LinkChecker',
-        },
+        headers: { 'User-Agent': UA },
       });
-
       clearTimeout(timer);
-
-      if (response.status >= 400) {
-        return {
-          alive: false,
-          detail: `HTTP ${response.status} for ${url}`,
-        };
-      }
-
-      return { alive: true, detail: '' };
+      status = response.status;
     } catch (error: unknown) {
-      const errMsg =
-        error instanceof Error ? error.message : String(error);
+      errorDetail = error instanceof Error ? error.message : String(error);
+    }
 
+    if (status === null || status >= 400) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
-
         const response = await fetch(url, {
           method: 'GET',
           redirect: 'follow',
           signal: controller.signal,
-          headers: {
-            'User-Agent': 'AI-News-Dashboard/1.0 LinkChecker',
-            Range: 'bytes=0-0',
-          },
+          headers: { 'User-Agent': UA, Range: 'bytes=0-0' },
         });
-
         clearTimeout(timer);
-
-        if (response.status >= 400) {
-          return {
-            alive: false,
-            detail: `HTTP ${response.status} for ${url}`,
-          };
-        }
-
-        return { alive: true, detail: '' };
+        status = response.status;
+        errorDetail = '';
       } catch {
-        return {
-          alive: false,
-          detail: `Request failed: ${errMsg}`,
-        };
+        return { alive: true, detail: `probe_timeout: ${errorDetail}` };
       }
     }
+
+    if (status !== null && (status === 404 || status === 410)) {
+      return { alive: false, detail: `HTTP ${status} for ${url}` };
+    }
+
+    if (status !== null && status >= 400) {
+      return { alive: true, detail: `probe_status: ${status}` };
+    }
+
+    return { alive: true, detail: '' };
   }
 
   private async blockArticle(
@@ -822,6 +814,117 @@ export class CollectorService {
     }
 
     this.logger.log(`Clustering completed: ${groups.size} groups`);
+  }
+
+  // ─── Front Page Diversity Selection ───────────────────────
+
+  async selectForFrontPage(): Promise<void> {
+    const limit = await this.getConfig('daily_front_page_limit', 20);
+    const sourceCap = Math.max(2, Math.ceil(limit / 5));
+    const directionCap = Math.max(2, Math.ceil(limit / 2));
+    const DIRECTION_ORDER = [
+      'agent', 'model', 'coding', 'multi',
+      'eval', 'infra', 'data', 'security',
+    ];
+
+    await this.db.execute(sql`
+      UPDATE article SET front_page_rank = NULL, exclude_reason = NULL
+      WHERE front_page_rank IS NOT NULL OR exclude_reason IS NOT NULL
+    `);
+
+    const publishThreshold = await this.getConfig('publish_threshold', 75);
+
+    const candidatesResult = await this.db.execute(sql`
+      SELECT id, source_name, primary_direction, primary_score
+      FROM article
+      WHERE status = 'published' AND primary_score >= ${publishThreshold}
+        AND published_at > now() - interval '7 days'
+      ORDER BY primary_score DESC
+    `);
+
+    interface CandidateRow {
+      id: string;
+      source_name: string;
+      primary_direction: string | null;
+      primary_score: number | null;
+    }
+
+    const rows = candidatesResult as unknown as CandidateRow[];
+
+    const byDirection = new Map<string, CandidateRow[]>();
+    for (const c of rows) {
+      const d = c.primary_direction || 'agent';
+      if (!byDirection.has(d)) byDirection.set(d, []);
+      byDirection.get(d)!.push(c);
+    }
+
+    const selected: CandidateRow[] = [];
+    const sourceCounts = new Map<string, number>();
+    const directionCounts = new Map<string, number>();
+
+    let changed = true;
+    while (selected.length < limit && changed) {
+      changed = false;
+      for (const dir of DIRECTION_ORDER) {
+        if (selected.length >= limit) break;
+        const queue = byDirection.get(dir) || [];
+        let picked = false;
+        while (queue.length > 0 && !picked) {
+          const c = queue.shift()!;
+          const src = c.source_name || 'unknown';
+          if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
+          if ((directionCounts.get(dir) || 0) >= directionCap) break;
+          selected.push(c);
+          sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1);
+          directionCounts.set(dir, (directionCounts.get(dir) || 0) + 1);
+          changed = true;
+          picked = true;
+        }
+      }
+    }
+
+    for (const c of rows) {
+      if (selected.length >= limit) break;
+      if (selected.some((s: CandidateRow) => s.id === c.id)) continue;
+      const src = c.source_name || 'unknown';
+      const dir = c.primary_direction || 'agent';
+      if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
+      if (
+        (directionCounts.get(dir) || 0) >= directionCap + 1 &&
+        selected.length < limit - 1
+      ) continue;
+      selected.push(c);
+      sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1);
+      directionCounts.set(dir, (directionCounts.get(dir) || 0) + 1);
+    }
+
+    for (let i = 0; i < selected.length; i++) {
+      await this.db.execute(sql`
+        UPDATE article SET front_page_rank = ${100 + i} WHERE id = ${selected[i].id}
+      `);
+    }
+
+    const selectedIds = new Set(selected.map((s: CandidateRow) => s.id));
+    for (const c of rows) {
+      if (selectedIds.has(c.id)) continue;
+      const src = c.source_name || 'unknown';
+      const dir = c.primary_direction || 'agent';
+      let reason: string;
+      if ((sourceCounts.get(src) || 0) >= sourceCap) {
+        reason = 'source_cap';
+      } else if ((directionCounts.get(dir) || 0) >= directionCap) {
+        reason = 'direction_cap';
+      } else {
+        reason = 'limit_reached';
+      }
+      await this.db.execute(sql`
+        UPDATE article SET exclude_reason = ${reason} WHERE id = ${c.id}
+      `);
+    }
+
+    this.logger.log(
+      `Front page: selected ${selected.length}/${rows.length} candidates`,
+    );
   }
 
   // ─── Config Helpers ───────────────────────────────────────

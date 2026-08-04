@@ -18,4 +18,17 @@ export class CollectorController {
       return { ok: false, message: errMsg };
     }
   }
+
+  @NeedLogin()
+  @Post('select-front-page')
+  async selectFrontPage(): Promise<{ ok: boolean; message: string }> {
+    try {
+      await this.collectorService.selectForFrontPage();
+      return { ok: true, message: 'Front page selection completed' };
+    } catch (error: unknown) {
+      const errMsg =
+        error instanceof Error ? error.message : String(error);
+      return { ok: false, message: errMsg };
+    }
+  }
 }

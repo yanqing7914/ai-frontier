@@ -89,7 +89,10 @@ export interface HotArticleItem {
   primaryScore: number;
   publishedAt: string;
   clusterCount: number;
+  frontPageRank: number | null;
 }
+
+export type ExcludeReason = 'source_cap' | 'direction_cap' | 'limit_reached';
 
 export interface WorkbenchArticleItem {
   id: string;
@@ -100,6 +103,7 @@ export interface WorkbenchArticleItem {
   status: ArticleStatus;
   aiProcessed: boolean;
   aiDegradeReason: string | null;
+  excludeReason: ExcludeReason | null;
   collectedAt: string;
 }
 

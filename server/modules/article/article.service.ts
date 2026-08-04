@@ -10,6 +10,7 @@ import {
   count,
   desc,
   inArray,
+  gte,
   isNotNull,
   isNull,
   ne,
@@ -35,6 +36,7 @@ import type {
   ArticleStatus,
   QualityGateReason,
   TraceStatus,
+  ExcludeReason,
 } from '@shared/api.interface';
 import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
 
@@ -53,7 +55,10 @@ export class ArticleService {
     const { page, pageSize, directions } = params;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [eq(article.status, 'published')];
+    const conditions = [
+      eq(article.status, 'published'),
+      isNotNull(article.frontPageRank),
+    ];
     if (directions && directions.length > 0) {
       conditions.push(inArray(article.primaryDirection, directions));
     }
@@ -71,10 +76,11 @@ export class ArticleService {
         primaryScore: article.primaryScore,
         publishedAt: article.publishedAt,
         clusterId: article.clusterId,
+        frontPageRank: article.frontPageRank,
       })
       .from(article)
       .where(whereClause)
-      .orderBy(desc(article.primaryScore))
+      .orderBy(article.frontPageRank)
       .limit(pageSize)
       .offset(offset);
 
@@ -122,6 +128,7 @@ export class ArticleService {
       clusterCount: row.clusterId
         ? (clusterCountMap.get(row.clusterId) ?? 1)
         : 1,
+      frontPageRank: row.frontPageRank ?? null,
     }));
 
     return { items, total };
@@ -212,6 +219,7 @@ export class ArticleService {
         status: article.status,
         aiProcessed: article.aiProcessed,
         aiDegradeReason: article.aiDegradeReason,
+        excludeReason: article.excludeReason,
         collectedAt: article.collectedAt,
       })
       .from(article)
@@ -235,6 +243,7 @@ export class ArticleService {
       status: row.status as ArticleStatus,
       aiProcessed: row.aiProcessed,
       aiDegradeReason: row.aiDegradeReason,
+      excludeReason: row.excludeReason as ExcludeReason | null,
       collectedAt: row.collectedAt.toISOString(),
     }));
 

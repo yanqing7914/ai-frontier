@@ -279,6 +279,8 @@ export const article = pgTable("article", {
   primaryScore: integer("primary_score"),
   aiProcessed: boolean("ai_processed").notNull().default(false),
   aiDegradeReason: text("ai_degrade_reason"),
+  frontPageRank: integer("front_page_rank"),
+  excludeReason: text("exclude_reason"),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)

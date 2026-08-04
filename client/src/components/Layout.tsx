@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Flame, TrendingUp, LayoutDashboard, Database } from 'lucide-react';
+import { Flame, Github, TrendingUp, LayoutDashboard, Database } from 'lucide-react';
 import { useAppInfo } from '@lark-apaas/client-toolkit/hooks/useAppInfo';
 import { cn } from '@client/src/lib/utils';
 
@@ -11,7 +11,8 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { path: '/', label: '今日热点', icon: Flame },
-  { path: '/trending', label: '热榜', icon: TrendingUp },
+  { path: '/trending/github', label: 'GitHub 热榜', icon: Github },
+  { path: '/trending/weibo', label: '微博热搜', icon: TrendingUp },
   { path: '/workbench', label: '运营工作台', icon: LayoutDashboard },
   { path: '/sources', label: '源管理', icon: Database },
 ];
