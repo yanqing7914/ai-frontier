@@ -192,14 +192,6 @@
   "overrides": {
     "dayjs": "^1.11.15"
   },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testMatch": [
-      "<rootDir>/server/**/*.spec.ts",
-      "<rootDir>/test/unit/**/*.spec.ts"
-    ]
-  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"
