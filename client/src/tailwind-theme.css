@@ -44,22 +44,24 @@
   --sidebar-border: hsl(220, 15%, 88%);
   --sidebar-ring: hsl(220, 80%, 48%);
 
-  --direction-agent: hsl(220, 50%, 58%);
-  --direction-agent-fg: hsl(220, 60%, 25%);
   --direction-model: hsl(265, 48%, 60%);
   --direction-model-fg: hsl(265, 55%, 28%);
+  --direction-agent: hsl(220, 50%, 58%);
+  --direction-agent-fg: hsl(220, 60%, 25%);
+  --direction-multimodal: hsl(310, 42%, 58%);
+  --direction-multimodal-fg: hsl(310, 50%, 28%);
   --direction-coding: hsl(170, 45%, 48%);
   --direction-coding-fg: hsl(170, 55%, 22%);
-  --direction-multi: hsl(310, 42%, 58%);
-  --direction-multi-fg: hsl(310, 50%, 28%);
-  --direction-eval: hsl(45, 55%, 52%);
-  --direction-eval-fg: hsl(45, 65%, 25%);
-  --direction-infra: hsl(195, 50%, 50%);
-  --direction-infra-fg: hsl(195, 60%, 22%);
-  --direction-data: hsl(130, 45%, 50%);
-  --direction-data-fg: hsl(130, 55%, 22%);
-  --direction-security: hsl(0, 48%, 58%);
-  --direction-security-fg: hsl(0, 58%, 28%);
+  --direction-infrastructure: hsl(195, 50%, 50%);
+  --direction-infrastructure-fg: hsl(195, 60%, 22%);
+  --direction-data_eval: hsl(45, 55%, 52%);
+  --direction-data_eval-fg: hsl(45, 65%, 25%);
+  --direction-safety_governance: hsl(0, 48%, 58%);
+  --direction-safety_governance-fg: hsl(0, 58%, 28%);
+  --direction-applications: hsl(150, 45%, 50%);
+  --direction-applications-fg: hsl(150, 55%, 22%);
+  --direction-business_ecosystem: hsl(30, 50%, 52%);
+  --direction-business_ecosystem-fg: hsl(30, 60%, 25%);
 
   --primary-border: hsl(from hsl(220, 75%, 45%) h s calc(l + var(--opaque-button-border-intensity)));
   --secondary-border: hsl(from hsl(220, 20%, 93%) h s calc(l + var(--opaque-button-border-intensity)));

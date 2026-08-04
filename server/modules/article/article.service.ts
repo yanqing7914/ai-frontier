@@ -39,6 +39,12 @@ import type {
   ExcludeReason,
 } from '@shared/api.interface';
 import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
+import { LEGACY_DIRECTION_MAP } from '@shared/api.interface';
+
+function normalizeDirection(raw: string | null | undefined): Direction {
+  if (!raw) return 'agent';
+  return (LEGACY_DIRECTION_MAP[raw] ?? raw) as Direction;
+}
 
 @Injectable()
 export class ArticleService {
@@ -62,27 +68,14 @@ export class ArticleService {
       baseConditions.push(inArray(article.primaryDirection, directions));
     }
 
-    const frontPageConditions = [
+    const sevenDaysAgo = sql`now() - interval '7 days'`;
+
+    const frontPageWhere = and(
       ...baseConditions,
       isNotNull(article.frontPageRank),
-    ];
-    const frontPageWhere = and(...frontPageConditions);
+    );
 
-    const frontPageCountResult = await this.db
-      .select({ count: count() })
-      .from(article)
-      .where(frontPageWhere);
-    const frontPageCount = Number(frontPageCountResult[0]?.count ?? 0);
-
-    const useFallback = frontPageCount === 0;
-    const whereClause = useFallback
-      ? and(...baseConditions)
-      : frontPageWhere;
-    const orderClause = useFallback
-      ? [desc(article.primaryScore)]
-      : [article.frontPageRank];
-
-    const rows = await this.db
+    const rankedRows = await this.db
       .select({
         id: article.id,
         title: article.title,
@@ -97,16 +90,65 @@ export class ArticleService {
         frontPageRank: article.frontPageRank,
       })
       .from(article)
-      .where(whereClause)
-      .orderBy(...orderClause)
-      .limit(pageSize)
-      .offset(offset);
+      .where(frontPageWhere)
+      .orderBy(article.frontPageRank);
 
-    const totalResult = await this.db
-      .select({ count: count() })
-      .from(article)
-      .where(whereClause);
-    const total = Number(totalResult[0]?.count ?? 0);
+    const rankedCount = rankedRows.length;
+    const minItems = Math.max(pageSize, 10);
+
+    let rows = rankedRows;
+    let total = rankedCount;
+
+    if (rankedCount < minItems) {
+      const rankedIds = rankedRows.map((r) => r.id);
+      const supplementWhere = rankedIds.length > 0
+        ? and(
+            ...baseConditions,
+            isNull(article.frontPageRank),
+            gte(article.publishedAt, sevenDaysAgo),
+            sql`${article.id} NOT IN (${sql.join(rankedIds.map((id: string) => sql`${id}`), sql`, `)})`,
+          )
+        : and(
+            ...baseConditions,
+            isNull(article.frontPageRank),
+            gte(article.publishedAt, sevenDaysAgo),
+          );
+
+      const supplementRows = await this.db
+        .select({
+          id: article.id,
+          title: article.title,
+          url: article.url,
+          originalUrl: article.originalUrl,
+          summary: article.summary,
+          sourceName: article.sourceName,
+          primaryDirection: article.primaryDirection,
+          primaryScore: article.primaryScore,
+          publishedAt: article.publishedAt,
+          clusterId: article.clusterId,
+          frontPageRank: article.frontPageRank,
+        })
+        .from(article)
+        .where(supplementWhere)
+        .orderBy(desc(article.primaryScore), desc(article.publishedAt))
+        .limit(minItems - rankedCount);
+
+      rows = [...rankedRows, ...supplementRows];
+
+      const supplementCountResult = await this.db
+        .select({ count: count() })
+        .from(article)
+        .where(supplementWhere);
+      total = rankedCount + Number(supplementCountResult[0]?.count ?? 0);
+    } else {
+      const totalResult = await this.db
+        .select({ count: count() })
+        .from(article)
+        .where(frontPageWhere);
+      total = Number(totalResult[0]?.count ?? 0);
+    }
+
+    rows = rows.slice(offset, offset + pageSize);
 
     // Batch compute cluster counts
     const clusterIds = rows
@@ -140,7 +182,7 @@ export class ArticleService {
       originalUrl: row.originalUrl,
       summary: row.summary ?? '',
       sourceName: row.sourceName,
-      primaryDirection: (row.primaryDirection ?? 'agent') as Direction,
+      primaryDirection: normalizeDirection(row.primaryDirection),
       primaryScore: row.primaryScore ?? 0,
       publishedAt: row.publishedAt?.toISOString() ?? '',
       clusterCount: row.clusterId
@@ -256,7 +298,7 @@ export class ArticleService {
       id: row.id,
       title: row.title,
       sourceName: row.sourceName,
-      primaryDirection: row.primaryDirection as Direction | null,
+      primaryDirection: normalizeDirection(row.primaryDirection),
       primaryScore: row.primaryScore,
       status: row.status as ArticleStatus,
       aiProcessed: row.aiProcessed,

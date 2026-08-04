@@ -17,6 +17,7 @@ import type {
   UpdateFeedSourceRequest,
   ToggleFeedSourceRequest,
 } from '@shared/api.interface';
+import { LEGACY_DIRECTION_MAP } from '@shared/api.interface';
 
 @Injectable()
 export class FeedSourceService {
@@ -95,7 +96,9 @@ export class FeedSourceService {
       consecutiveFailures: row.consecutiveFailures,
       sourceCategory: row.sourceCategory ?? null,
       sourceCategoryId: row.sourceCategoryId ?? null,
-      primaryDirectionId: row.primaryDirectionId ?? null,
+      primaryDirectionId: row.primaryDirectionId
+        ? (LEGACY_DIRECTION_MAP[row.primaryDirectionId] ?? row.primaryDirectionId)
+        : null,
       sourceLayer: row.sourceLayer ?? null,
     }));
 

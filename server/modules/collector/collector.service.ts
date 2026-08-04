@@ -935,8 +935,9 @@ export class CollectorService {
     const sourceCap = Math.max(2, Math.ceil(limit / 5));
     const directionCap = Math.max(2, Math.ceil(limit / 2));
     const DIRECTION_ORDER = [
-      'agent', 'model', 'coding', 'multi',
-      'eval', 'infra', 'data', 'security',
+      'model', 'agent', 'multimodal', 'coding',
+      'infrastructure', 'data_eval', 'safety_governance',
+      'applications', 'business_ecosystem',
     ];
 
     await this.db.execute(sql`
@@ -965,7 +966,8 @@ export class CollectorService {
 
     const byDirection = new Map<string, CandidateRow[]>();
     for (const c of rows) {
-      const d = c.primary_direction || 'agent';
+      const raw = c.primary_direction || 'agent';
+      const d = LEGACY_DIRECTION_MAP[raw] ?? raw;
       if (!byDirection.has(d)) byDirection.set(d, []);
       byDirection.get(d)!.push(c);
     }
@@ -999,7 +1001,7 @@ export class CollectorService {
       if (selected.length >= limit) break;
       if (selected.some((s: CandidateRow) => s.id === c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = c.primary_direction || 'agent';
+      const dir = LEGACY_DIRECTION_MAP[c.primary_direction ?? ''] ?? (c.primary_direction || 'agent');
       if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
       if (
         (directionCounts.get(dir) || 0) >= directionCap + 1 &&
@@ -1020,7 +1022,7 @@ export class CollectorService {
     for (const c of rows) {
       if (selectedIds.has(c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = c.primary_direction || 'agent';
+      const dir = LEGACY_DIRECTION_MAP[c.primary_direction ?? ''] ?? (c.primary_direction || 'agent');
       let reason: string;
       if ((sourceCounts.get(src) || 0) >= sourceCap) {
         reason = 'source_cap';
