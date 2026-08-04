@@ -25,19 +25,10 @@ import {
 import * as crypto from 'crypto';
 import Parser from 'rss-parser';
 
-const DIRECTIONS = [
-  'model', 'agent', 'multimodal', 'coding',
-  'infrastructure', 'data_eval', 'safety_governance',
-  'applications', 'business_ecosystem',
-] as const;
-
-const LEGACY_DIRECTION_MAP: Record<string, string> = {
-  multi: 'multimodal',
-  infra: 'infrastructure',
-  eval: 'data_eval',
-  data: 'data_eval',
-  security: 'safety_governance',
-};
+import {
+  ALL_DIRECTION_IDS as DIRECTIONS,
+  normalizeDirection,
+} from '@shared/directions';
 
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
@@ -310,76 +301,59 @@ export class CollectorService {
             `Outer AI scoring catch failed for "${art.title}": ${degradeReason}`,
           );
           result = {
-            ...this.aiScoringService.ruleBasedScore(
+            ...this.aiScoringService.ruleBasedScoreArticle(
               art.title,
               art.content,
               tier,
+              degradeReason,
             ),
-            degradeReason,
           };
         }
       } else {
         if (aiCount >= aiDailyLimit) {
           result = {
-            ...this.aiScoringService.ruleBasedScore(
+            ...this.aiScoringService.ruleBasedScoreArticle(
               art.title,
               art.content,
               tier,
+              'ai_daily_limit_reached',
             ),
-            degradeReason: 'ai_daily_limit_reached',
           };
         } else {
           result = {
-            ...this.aiScoringService.ruleBasedScore(
+            ...this.aiScoringService.ruleBasedScoreArticle(
               art.title,
               art.content,
               tier,
+              `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`,
             ),
-            degradeReason: `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`,
           };
         }
         degradedCount++;
       }
 
       for (const dir of DIRECTIONS) {
-        const dimScores = result.scores[dir] ?? {
-          novelty: 0, depth: 0, impact: 0, authority: 0, timeliness: 0,
-        };
-        const totalScore =
-          dimScores.novelty + dimScores.depth + dimScores.impact +
-          dimScores.authority + dimScores.timeliness;
-
+        const ev = result.directionScores[dir];
         await this.db.insert(directionScore).values({
           articleId: art.id,
           direction: dir,
-          dimensionScores: dimScores,
-          totalScore,
+          dimensionScores: ev?.dimensionScores ?? {},
+          totalScore: ev?.normalizedScore ?? 0,
         });
       }
 
-      let primaryDir: string = DIRECTIONS[0];
-      let primaryScore = 0;
-      for (const dir of DIRECTIONS) {
-        const dim = result.scores[dir];
-        if (dim) {
-          const total =
-            dim.novelty + dim.depth + dim.impact +
-            dim.authority + dim.timeliness;
-          if (total > primaryScore) {
-            primaryScore = total;
-            primaryDir = dir;
-          }
-        }
-      }
+      const articleStatus = (!result.primaryDirection || !result.aiProcessed)
+        ? 'draft' : undefined;
 
       await this.db
         .update(article)
         .set({
-          primaryDirection: primaryDir,
-          primaryScore,
+          primaryDirection: result.primaryDirection,
+          primaryScore: result.publishScore,
           summary: result.summary,
           aiProcessed: result.aiProcessed,
           aiDegradeReason: result.degradeReason,
+          ...(articleStatus ? { status: articleStatus } : {}),
         })
         .where(eq(article.id, art.id));
 
@@ -430,7 +404,8 @@ export class CollectorService {
       if (
         current &&
         (current.primaryScore ?? 0) >= publishThreshold &&
-        current.status !== 'pending_review'
+        current.status !== 'pending_review' &&
+        current.status !== 'blocked'
       ) {
         await this.db
           .update(article)
@@ -966,8 +941,7 @@ export class CollectorService {
 
     const byDirection = new Map<string, CandidateRow[]>();
     for (const c of rows) {
-      const raw = c.primary_direction || 'agent';
-      const d = LEGACY_DIRECTION_MAP[raw] ?? raw;
+      const d = normalizeDirection(c.primary_direction) ?? 'model';
       if (!byDirection.has(d)) byDirection.set(d, []);
       byDirection.get(d)!.push(c);
     }
@@ -1001,7 +975,7 @@ export class CollectorService {
       if (selected.length >= limit) break;
       if (selected.some((s: CandidateRow) => s.id === c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = LEGACY_DIRECTION_MAP[c.primary_direction ?? ''] ?? (c.primary_direction || 'agent');
+      const dir = normalizeDirection(c.primary_direction) ?? 'model';
       if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
       if (
         (directionCounts.get(dir) || 0) >= directionCap + 1 &&
@@ -1022,7 +996,7 @@ export class CollectorService {
     for (const c of rows) {
       if (selectedIds.has(c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = LEGACY_DIRECTION_MAP[c.primary_direction ?? ''] ?? (c.primary_direction || 'agent');
+      const dir = normalizeDirection(c.primary_direction) ?? 'model';
       let reason: string;
       if ((sourceCounts.get(src) || 0) >= sourceCap) {
         reason = 'source_cap';
@@ -1141,41 +1115,20 @@ export class CollectorService {
           .where(eq(directionScore.articleId, art.id));
 
         for (const dir of DIRECTIONS) {
-          const dimScores = result.scores[dir] ?? {
-            novelty: 0, depth: 0, impact: 0, authority: 0, timeliness: 0,
-          };
-          const totalScore =
-            dimScores.novelty + dimScores.depth + dimScores.impact +
-            dimScores.authority + dimScores.timeliness;
-
+          const ev = result.directionScores[dir];
           await this.db.insert(directionScore).values({
             articleId: art.id,
             direction: dir,
-            dimensionScores: dimScores,
-            totalScore,
+            dimensionScores: ev?.dimensionScores ?? {},
+            totalScore: ev?.normalizedScore ?? 0,
           });
-        }
-
-        let primaryDir: string = DIRECTIONS[0];
-        let primaryScore = 0;
-        for (const dir of DIRECTIONS) {
-          const dim = result.scores[dir];
-          if (dim) {
-            const total =
-              dim.novelty + dim.depth + dim.impact +
-              dim.authority + dim.timeliness;
-            if (total > primaryScore) {
-              primaryScore = total;
-              primaryDir = dir;
-            }
-          }
         }
 
         await this.db
           .update(article)
           .set({
-            primaryDirection: primaryDir,
-            primaryScore,
+            primaryDirection: result.primaryDirection,
+            primaryScore: result.publishScore,
             summary: result.summary,
             aiProcessed: true,
             aiDegradeReason: null,

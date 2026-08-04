@@ -1,30 +1,17 @@
+import type { Direction } from './directions';
+export type { Direction } from './directions';
+export {
+  normalizeDirection,
+  normalizeDirectionSafe,
+  isValidDirection,
+  ALL_DIRECTION_IDS,
+  DIRECTIONS,
+  LEGACY_DIRECTION_MAP,
+  getDirectionMeta,
+} from './directions';
+
 export type Tier = 'authoritative' | 'validation' | 'signal';
 export type FeedType = 'rss' | 'atom' | 'web';
-export type Direction =
-  | 'model' | 'agent' | 'multimodal' | 'coding'
-  | 'infrastructure' | 'data_eval' | 'safety_governance'
-  | 'applications' | 'business_ecosystem';
-
-export type LegacyDirection = 'multi' | 'infra' | 'eval' | 'data' | 'security';
-
-export const LEGACY_DIRECTION_MAP: Record<string, Direction> = {
-  multi: 'multimodal',
-  infra: 'infrastructure',
-  eval: 'data_eval',
-  data: 'data_eval',
-  security: 'safety_governance',
-};
-
-export function normalizeDirection(raw: string | null | undefined): Direction {
-  if (!raw) return 'agent';
-  return (LEGACY_DIRECTION_MAP[raw] ?? raw) as Direction;
-}
-
-export const ALL_DIRECTIONS: Direction[] = [
-  'model', 'agent', 'multimodal', 'coding',
-  'infrastructure', 'data_eval', 'safety_governance',
-  'applications', 'business_ecosystem',
-];
 export type ArticleStatus = 'published' | 'draft' | 'blocked' | 'pending_review';
 export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable' | 'same_url' | 'same_title' | 'same_batch_url' | 'same_batch_title' | 'source_unreliable';
 export type ReviewStatus = 'pending' | 'approved' | 'rejected';
@@ -161,13 +148,7 @@ export interface DirectionScoreItem {
   dimensionScores: DimensionScores;
 }
 
-export interface DimensionScores {
-  novelty: number;
-  depth: number;
-  impact: number;
-  authority: number;
-  timeliness: number;
-}
+export type DimensionScores = Record<string, number>;
 
 export interface QualityGateItem {
   id: string;

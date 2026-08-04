@@ -39,7 +39,7 @@ import type {
   ExcludeReason,
 } from '@shared/api.interface';
 import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
-import { normalizeDirection } from '@shared/api.interface';
+import { normalizeDirection, normalizeDirectionSafe } from '@shared/api.interface';
 
 @Injectable()
 export class ArticleService {
@@ -57,7 +57,7 @@ export class ArticleService {
     const offset = (page - 1) * pageSize;
 
     const normalizedDirections = directions && directions.length > 0
-      ? directions.map((d: string) => normalizeDirection(d))
+      ? directions.map((d: string) => normalizeDirection(d)).filter((d): d is Direction => d !== null)
       : undefined;
 
     const baseConditions = [
@@ -196,7 +196,7 @@ export class ArticleService {
       originalUrl: row.originalUrl,
       summary: row.summary ?? '',
       sourceName: row.sourceName,
-      primaryDirection: normalizeDirection(row.primaryDirection),
+      primaryDirection: normalizeDirectionSafe(row.primaryDirection),
       primaryScore: row.primaryScore ?? 0,
       publishedAt: row.publishedAt?.toISOString() ?? '',
       clusterCount: row.clusterId
@@ -278,7 +278,8 @@ export class ArticleService {
       conditions.push(eq(article.status, status));
     }
     if (direction) {
-      conditions.push(eq(article.primaryDirection, normalizeDirection(direction)));
+      const normDir = normalizeDirection(direction);
+      if (normDir) conditions.push(eq(article.primaryDirection, normDir));
     }
     const whereClause =
       conditions.length > 0 ? and(...conditions) : undefined;
@@ -347,7 +348,7 @@ export class ArticleService {
       .where(eq(directionScore.articleId, id));
 
     const items: DirectionScoreItem[] = scores.map((row) => ({
-      direction: normalizeDirection(row.direction),
+      direction: normalizeDirectionSafe(row.direction),
       totalScore: row.totalScore,
       dimensionScores: row.dimensionScores as DimensionScores,
     }));

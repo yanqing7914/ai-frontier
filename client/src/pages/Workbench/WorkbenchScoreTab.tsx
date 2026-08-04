@@ -40,11 +40,30 @@ const DIRECTIONS = [
 ] as const;
 
 const DIMENSION_LABELS: Record<string, string> = {
-  novelty: '新颖度',
-  depth: '深度',
-  impact: '影响力',
-  authority: '权威性',
-  timeliness: '时效性',
+  novelty: '新颖度', depth: '深度', impact: '影响力', authority: '权威性', timeliness: '时效性',
+  entity: '实体识别', capability: '能力变化', availability: '可用性', performance: '性能质量',
+  cost: '成本效率', ecosystem: '生态兼容', adoption: '采用影响',
+  task_boundary: '任务边界', tool_call: '工具调用', protocol: '协议生态',
+  orchestration: '多步编排', observability: '可观测性', production: '生产控制',
+  benchmark: '评测效果', workflow: '企业工作流',
+  modality_coverage: '模态覆盖', io_capability: '输入输出', quality: '生成质量',
+  realtime: '实时交互', editing: '编辑控制', '3d_world': '3D/世界模型',
+  safety_copyright: '安全版权', product: '产品落地',
+  code_gen: '代码生成', repo_understanding: '仓库理解', engineering: '工程执行',
+  ide_integration: 'IDE集成', delivery: '交付质量', cost_speed: '成本速度', security: '安全权限',
+  hardware: '算力硬件', training: '训练能力', software_stack: '软件栈',
+  cloud: '云/数据中心', edge: '端侧', ops: '稳定运维',
+  data_asset: '数据资产', coverage: '覆盖范围', methodology: '方法指标',
+  reproducibility: '可复现性', governance: '许可治理', decision_value: '决策价值',
+  risk_type: '风险类型', controls: '控制措施', verification: '风险验证',
+  privacy: '隐私保护', copyright: '版权问题', regulation: '法规政策',
+  framework: '治理框架', deployment_impact: '部署影响',
+  industry: '行业用户', business_problem: '业务问题', launch_status: '上线状态',
+  scale: '使用规模', roi: '效果/ROI', workflow_change: '工作流改造',
+  replicability: '可复制性', risk_responsibility: '风险责任',
+  business_fact: '商业事实', entity_market: '市场位置', strategy: '战略变化',
+  business_model: '商业模式', market_landscape: '市场格局',
+  open_source: '开源社区', talent: '人才组织', signal: '商业信号',
 };
 
 const STATUS_MAP: Record<ArticleStatus, { label: string; className: string }> = {
@@ -295,7 +314,11 @@ const WorkbenchScoreTab = () => {
                       </td>
                       <td className="py-3 px-4">
                         {article.aiProcessed ? (
-                          <Badge variant="default">AI 已处理</Badge>
+                          <Badge variant="default">AI 精选</Badge>
+                        ) : !article.aiDegradeReason ? (
+                          <Badge variant="outline" className="border-muted-foreground/40 text-muted-foreground">
+                            规则评分
+                          </Badge>
                         ) : (
                           <TooltipProvider>
                             <Tooltip>
