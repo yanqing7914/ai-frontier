@@ -81,6 +81,13 @@ export interface CreateFeedSourceRequest {
   url: string;
   tier: Tier;
   feedType: FeedType;
+  sourceCategory?: string;
+  sourceCategoryId?: string;
+  region?: string;
+  primaryDirectionId?: string;
+  directionIds?: string[];
+  sourceLayer?: string;
+  notes?: string;
 }
 
 export interface UpdateFeedSourceRequest {
@@ -88,6 +95,13 @@ export interface UpdateFeedSourceRequest {
   url?: string;
   tier?: Tier;
   feedType?: FeedType;
+  sourceCategory?: string;
+  sourceCategoryId?: string;
+  region?: string;
+  primaryDirectionId?: string;
+  directionIds?: string[];
+  sourceLayer?: string;
+  notes?: string;
 }
 
 export interface ToggleFeedSourceRequest {

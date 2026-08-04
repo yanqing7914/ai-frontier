@@ -127,6 +127,17 @@ export class FeedSourceService {
         url: dto.url,
         tier: dto.tier,
         feedType: dto.feedType,
+        sourceCategory: dto.sourceCategory,
+        sourceCategoryId: dto.sourceCategoryId,
+        region: dto.region ?? 'global',
+        primaryDirectionId: dto.primaryDirectionId
+          ? normalizeDirection(dto.primaryDirectionId)
+          : undefined,
+        directionIds: dto.directionIds
+          ? dto.directionIds.map((d: string) => normalizeDirection(d))
+          : undefined,
+        sourceLayer: dto.sourceLayer,
+        notes: dto.notes,
       })
       .returning();
 
@@ -139,6 +150,17 @@ export class FeedSourceService {
     if (dto.url !== undefined) updateData.url = dto.url;
     if (dto.tier !== undefined) updateData.tier = dto.tier;
     if (dto.feedType !== undefined) updateData.feedType = dto.feedType;
+    if (dto.sourceCategory !== undefined) updateData.sourceCategory = dto.sourceCategory;
+    if (dto.sourceCategoryId !== undefined) updateData.sourceCategoryId = dto.sourceCategoryId;
+    if (dto.region !== undefined) updateData.region = dto.region;
+    if (dto.primaryDirectionId !== undefined) {
+      updateData.primaryDirectionId = normalizeDirection(dto.primaryDirectionId);
+    }
+    if (dto.directionIds !== undefined) {
+      updateData.directionIds = dto.directionIds.map((d: string) => normalizeDirection(d));
+    }
+    if (dto.sourceLayer !== undefined) updateData.sourceLayer = dto.sourceLayer;
+    if (dto.notes !== undefined) updateData.notes = dto.notes;
 
     if (Object.keys(updateData).length === 0) {
       return this.findOne(id);

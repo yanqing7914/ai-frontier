@@ -56,62 +56,91 @@ export class ArticleService {
     const { page, pageSize, directions } = params;
     const offset = (page - 1) * pageSize;
 
+    const normalizedDirections = directions && directions.length > 0
+      ? directions.map((d: string) => normalizeDirection(d))
+      : undefined;
+
     const baseConditions = [
       eq(article.status, 'published'),
+      gte(article.publishedAt, sql`now() - interval '7 days'`),
+      gte(article.primaryScore, 75),
     ];
-    if (directions && directions.length > 0) {
-      baseConditions.push(inArray(article.primaryDirection, directions));
+    if (normalizedDirections && normalizedDirections.length > 0) {
+      baseConditions.push(inArray(article.primaryDirection, normalizedDirections));
     }
 
-    const sevenDaysAgo = sql`now() - interval '7 days'`;
+    const rankedWhere = and(...baseConditions, isNotNull(article.frontPageRank));
+    const supplementWhere = and(...baseConditions, isNull(article.frontPageRank));
 
-    const frontPageWhere = and(
-      ...baseConditions,
-      isNotNull(article.frontPageRank),
-    );
+    const [rankedCountResult, supplementCountResult] = await Promise.all([
+      this.db.select({ count: count() }).from(article).where(rankedWhere),
+      this.db.select({ count: count() }).from(article).where(supplementWhere),
+    ]);
+    const rankedCount = Number(rankedCountResult[0]?.count ?? 0);
+    const supplementCount = Number(supplementCountResult[0]?.count ?? 0);
+    const total = rankedCount + supplementCount;
 
-    const rankedRows = await this.db
-      .select({
-        id: article.id,
-        title: article.title,
-        url: article.url,
-        originalUrl: article.originalUrl,
-        summary: article.summary,
-        sourceName: article.sourceName,
-        primaryDirection: article.primaryDirection,
-        primaryScore: article.primaryScore,
-        publishedAt: article.publishedAt,
-        clusterId: article.clusterId,
-        frontPageRank: article.frontPageRank,
-      })
-      .from(article)
-      .where(frontPageWhere)
-      .orderBy(article.frontPageRank);
+    const pageItems: Array<{
+      id: string;
+      title: string;
+      url: string;
+      originalUrl: string | null;
+      summary: string | null;
+      sourceName: string;
+      primaryDirection: string | null;
+      primaryScore: number | null;
+      publishedAt: Date | null;
+      clusterId: string | null;
+      frontPageRank: number | null;
+    }> = [];
 
-    const rankedCount = rankedRows.length;
-    const minItems = Math.max(pageSize, 10);
+    if (offset < rankedCount) {
+      const rankedPage = await this.db
+        .select({
+          id: article.id,
+          title: article.title,
+          url: article.url,
+          originalUrl: article.originalUrl,
+          summary: article.summary,
+          sourceName: article.sourceName,
+          primaryDirection: article.primaryDirection,
+          primaryScore: article.primaryScore,
+          publishedAt: article.publishedAt,
+          clusterId: article.clusterId,
+          frontPageRank: article.frontPageRank,
+        })
+        .from(article)
+        .where(rankedWhere)
+        .orderBy(article.frontPageRank)
+        .limit(pageSize)
+        .offset(offset);
+      pageItems.push(...rankedPage);
 
-    let rows = rankedRows;
-    let total = rankedCount;
-
-    if (rankedCount < minItems) {
-      const rankedIds = rankedRows.map((r) => r.id);
-      const supplementWhere = rankedIds.length > 0
-        ? and(
-            ...baseConditions,
-            isNull(article.frontPageRank),
-            gte(article.publishedAt, sevenDaysAgo),
-            gte(article.primaryScore, 75),
-            sql`${article.id} NOT IN (${sql.join(rankedIds.map((id: string) => sql`${id}`), sql`, `)})`,
-          )
-        : and(
-            ...baseConditions,
-            isNull(article.frontPageRank),
-            gte(article.publishedAt, sevenDaysAgo),
-            gte(article.primaryScore, 75),
-          );
-
-      const supplementRows = await this.db
+      const remaining = pageSize - rankedPage.length;
+      if (remaining > 0) {
+        const supplementPage = await this.db
+          .select({
+            id: article.id,
+            title: article.title,
+            url: article.url,
+            originalUrl: article.originalUrl,
+            summary: article.summary,
+            sourceName: article.sourceName,
+            primaryDirection: article.primaryDirection,
+            primaryScore: article.primaryScore,
+            publishedAt: article.publishedAt,
+            clusterId: article.clusterId,
+            frontPageRank: article.frontPageRank,
+          })
+          .from(article)
+          .where(supplementWhere)
+          .orderBy(desc(article.primaryScore), desc(article.publishedAt))
+          .limit(remaining);
+        pageItems.push(...supplementPage);
+      }
+    } else {
+      const supplementOffset = offset - rankedCount;
+      const supplementPage = await this.db
         .select({
           id: article.id,
           title: article.title,
@@ -128,24 +157,12 @@ export class ArticleService {
         .from(article)
         .where(supplementWhere)
         .orderBy(desc(article.primaryScore), desc(article.publishedAt))
-        .limit(minItems - rankedCount);
-
-      rows = [...rankedRows, ...supplementRows];
-
-      const supplementCountResult = await this.db
-        .select({ count: count() })
-        .from(article)
-        .where(supplementWhere);
-      total = rankedCount + Number(supplementCountResult[0]?.count ?? 0);
-    } else {
-      const totalResult = await this.db
-        .select({ count: count() })
-        .from(article)
-        .where(frontPageWhere);
-      total = Number(totalResult[0]?.count ?? 0);
+        .limit(pageSize)
+        .offset(supplementOffset);
+      pageItems.push(...supplementPage);
     }
 
-    rows = rows.slice(offset, offset + pageSize);
+    const rows = pageItems;
 
     // Batch compute cluster counts
     const clusterIds = rows
@@ -261,7 +278,7 @@ export class ArticleService {
       conditions.push(eq(article.status, status));
     }
     if (direction) {
-      conditions.push(eq(article.primaryDirection, direction));
+      conditions.push(eq(article.primaryDirection, normalizeDirection(direction)));
     }
     const whereClause =
       conditions.length > 0 ? and(...conditions) : undefined;
@@ -330,7 +347,7 @@ export class ArticleService {
       .where(eq(directionScore.articleId, id));
 
     const items: DirectionScoreItem[] = scores.map((row) => ({
-      direction: row.direction as Direction,
+      direction: normalizeDirection(row.direction),
       totalScore: row.totalScore,
       dimensionScores: row.dimensionScores as DimensionScores,
     }));
