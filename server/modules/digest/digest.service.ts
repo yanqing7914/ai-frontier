@@ -6,7 +6,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { dailyDigest, article } from '@server/database/schema';
 import type { DailyDigest, DailyDigestArticle, Direction } from '@shared/api.interface';
-import { normalizeDirectionSafe } from '@shared/api.interface';
+import { normalizeDirection } from '@shared/api.interface';
 
 @Injectable()
 export class DigestService {
@@ -44,7 +44,7 @@ export class DigestService {
       articles = rows.map((a) => ({
         id: a.id,
         title: a.title,
-        primaryDirection: normalizeDirectionSafe(a.primaryDirection) as DailyDigestArticle['primaryDirection'],
+        primaryDirection: normalizeDirection(a.primaryDirection) as DailyDigestArticle['primaryDirection'],
         primaryScore: a.primaryScore as number,
       }));
     }
@@ -102,7 +102,7 @@ export class DigestService {
     const digestArticles: DailyDigestArticle[] = articles.map((a) => ({
       id: a.id,
       title: a.title,
-      primaryDirection: normalizeDirectionSafe(a.primaryDirection) as DailyDigestArticle['primaryDirection'],
+      primaryDirection: normalizeDirection(a.primaryDirection) as DailyDigestArticle['primaryDirection'],
       primaryScore: a.primaryScore as number,
     }));
 

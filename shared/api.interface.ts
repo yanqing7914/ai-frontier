@@ -2,7 +2,6 @@ import type { Direction } from './directions';
 export type { Direction } from './directions';
 export {
   normalizeDirection,
-  normalizeDirectionSafe,
   isValidDirection,
   ALL_DIRECTION_IDS,
   DIRECTIONS,

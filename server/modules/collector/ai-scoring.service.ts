@@ -47,6 +47,7 @@ export interface ArticleScoringResult {
   primaryDirection: Direction | null;
   primaryScore: number;
   publishScore: number;
+  coreEvidencePassed: boolean;
   aiProcessed: boolean;
   degradeReason: string | null;
 }
@@ -449,12 +450,16 @@ export class AiScoringService {
     const publishScore = Math.min(100, primaryScore + genericScore);
     const summary = this.generateRuleSummary(title, content);
 
+    const coreEvidencePassed = primaryDirection !== null
+      && (directionScores[primaryDirection]?.hasClearEvidence ?? false);
+
     return {
       summary,
       directionScores,
       primaryDirection,
       primaryScore,
       publishScore,
+      coreEvidencePassed,
       aiProcessed: false,
       degradeReason,
     };
@@ -519,12 +524,16 @@ export class AiScoringService {
       `AI scoring completed for "${title}", primary=${primaryDirection}(${primaryScore}), publish=${publishScore}`,
     );
 
+    const coreEvidencePassed = primaryDirection !== null
+      && (directionScores[primaryDirection]?.hasClearEvidence ?? false);
+
     return {
       summary: rawResult.summary,
       directionScores,
       primaryDirection,
       primaryScore,
       publishScore,
+      coreEvidencePassed,
       aiProcessed: true,
       degradeReason: null,
     };

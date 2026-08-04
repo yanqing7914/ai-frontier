@@ -17,7 +17,7 @@ import type {
   UpdateFeedSourceRequest,
   ToggleFeedSourceRequest,
 } from '@shared/api.interface';
-import { normalizeDirectionSafe } from '@shared/api.interface';
+import { normalizeDirection } from '@shared/api.interface';
 
 @Injectable()
 export class FeedSourceService {
@@ -97,7 +97,7 @@ export class FeedSourceService {
       sourceCategory: row.sourceCategory ?? null,
       sourceCategoryId: row.sourceCategoryId ?? null,
       primaryDirectionId: row.primaryDirectionId
-        ? normalizeDirectionSafe(row.primaryDirectionId)
+        ? normalizeDirection(row.primaryDirectionId)
         : null,
       sourceLayer: row.sourceLayer ?? null,
     }));
@@ -131,10 +131,10 @@ export class FeedSourceService {
         sourceCategoryId: dto.sourceCategoryId,
         region: dto.region ?? 'global',
         primaryDirectionId: dto.primaryDirectionId
-          ? normalizeDirectionSafe(dto.primaryDirectionId)
+          ? normalizeDirection(dto.primaryDirectionId)
           : undefined,
         directionIds: dto.directionIds
-          ? dto.directionIds.map((d: string) => normalizeDirectionSafe(d))
+          ? dto.directionIds.map((d: string) => normalizeDirection(d))
           : undefined,
         sourceLayer: dto.sourceLayer,
         notes: dto.notes,
@@ -154,10 +154,10 @@ export class FeedSourceService {
     if (dto.sourceCategoryId !== undefined) updateData.sourceCategoryId = dto.sourceCategoryId;
     if (dto.region !== undefined) updateData.region = dto.region;
     if (dto.primaryDirectionId !== undefined) {
-      updateData.primaryDirectionId = normalizeDirectionSafe(dto.primaryDirectionId);
+      updateData.primaryDirectionId = normalizeDirection(dto.primaryDirectionId);
     }
     if (dto.directionIds !== undefined) {
-      updateData.directionIds = dto.directionIds.map((d: string) => normalizeDirectionSafe(d));
+      updateData.directionIds = dto.directionIds.map((d: string) => normalizeDirection(d));
     }
     if (dto.sourceLayer !== undefined) updateData.sourceLayer = dto.sourceLayer;
     if (dto.notes !== undefined) updateData.notes = dto.notes;

@@ -3,7 +3,7 @@ import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
 } from '@lark-apaas/fullstack-nestjs-core';
-import { eq, inArray, and, sql } from 'drizzle-orm';
+import { eq, ne, inArray, and, gte, isNotNull, sql } from 'drizzle-orm';
 import {
   article,
   feedSource,
@@ -378,6 +378,7 @@ export class CollectorService {
       SET status = 'draft'
       WHERE status = 'pending_review'
         AND collected_at < NOW() - (${autoApproveHours} || ' hours')::interval
+        AND primary_direction IS NOT NULL
         AND (primary_score IS NOT NULL AND primary_score >= ${autoApproveThreshold})
       RETURNING id
     `);
@@ -389,31 +390,9 @@ export class CollectorService {
       );
     }
 
-    // 9. Publish decision
+    // 9. Publish decision (unified gate)
     const publishThreshold = await this.getConfig('publish_threshold', 75);
-    let publishedCount = 0;
-    for (const art of linkAlive) {
-      const [current] = await this.db
-        .select({
-          primaryScore: article.primaryScore,
-          status: article.status,
-        })
-        .from(article)
-        .where(eq(article.id, art.id));
-
-      if (
-        current &&
-        (current.primaryScore ?? 0) >= publishThreshold &&
-        current.status !== 'pending_review' &&
-        current.status !== 'blocked'
-      ) {
-        await this.db
-          .update(article)
-          .set({ status: 'published' })
-          .where(eq(article.id, art.id));
-        publishedCount++;
-      }
-    }
+    const publishedCount = await this.executePublishGate(linkAlive, publishThreshold);
 
     this.logger.log(
       `Publish: ${publishedCount} articles published (threshold=${publishThreshold})`,
@@ -435,6 +414,27 @@ export class CollectorService {
       this.logger.log(
         `Auto-rescore: ${rescoreResult.succeeded} succeeded, ${rescoreResult.failed} failed`,
       );
+      const rescoredArticles = await this.db
+        .select({ id: article.id })
+        .from(article)
+        .where(
+          and(
+            ne(article.status, 'published'),
+            ne(article.status, 'blocked'),
+            isNotNull(article.primaryDirection),
+          ),
+        );
+      if (rescoredArticles.length > 0) {
+        const rescoredPublished = await this.executePublishGate(
+          rescoredArticles,
+          publishThreshold,
+        );
+        if (rescoredPublished > 0) {
+          this.logger.log(
+            `Post-rescore publish: ${rescoredPublished} articles published`,
+          );
+        }
+      }
       await this.selectForFrontPage();
     }
 
@@ -1157,6 +1157,58 @@ export class CollectorService {
     );
 
     return { rescored, succeeded, failed };
+  }
+
+  // ─── Publish Gate ──────────────────────────────────────────
+
+  private async executePublishGate(
+    articles: { id: string }[],
+    publishThreshold: number,
+  ): Promise<number> {
+    if (articles.length === 0) return 0;
+    const articleIds = articles.map((a) => a.id);
+
+    const evidenceRows = await this.db
+      .select({ articleId: directionScore.articleId })
+      .from(directionScore)
+      .where(
+        and(
+          inArray(directionScore.articleId, articleIds),
+          gte(directionScore.totalScore, 20),
+        ),
+      );
+    const evidenceSet = new Set(evidenceRows.map((r) => r.articleId));
+
+    let publishedCount = 0;
+    for (const art of articles) {
+      if (!evidenceSet.has(art.id)) continue;
+
+      const [current] = await this.db
+        .select({
+          primaryDirection: article.primaryDirection,
+          primaryScore: article.primaryScore,
+          status: article.status,
+        })
+        .from(article)
+        .where(eq(article.id, art.id));
+
+      if (
+        current
+        && current.primaryDirection
+        && (current.primaryScore ?? 0) >= publishThreshold
+        && current.status !== 'pending_review'
+        && current.status !== 'blocked'
+        && current.status !== 'published'
+      ) {
+        await this.db
+          .update(article)
+          .set({ status: 'published' })
+          .where(eq(article.id, art.id));
+        publishedCount++;
+      }
+    }
+
+    return publishedCount;
   }
 
   // ─── Config Helpers ───────────────────────────────────────

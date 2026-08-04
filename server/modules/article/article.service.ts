@@ -39,7 +39,8 @@ import type {
   ExcludeReason,
 } from '@shared/api.interface';
 import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
-import { normalizeDirection, normalizeDirectionSafe } from '@shared/api.interface';
+import { normalizeDirection } from '@shared/api.interface';
+import { ALL_DIRECTION_IDS } from '@shared/directions';
 
 @Injectable()
 export class ArticleService {
@@ -196,7 +197,7 @@ export class ArticleService {
       originalUrl: row.originalUrl,
       summary: row.summary ?? '',
       sourceName: row.sourceName,
-      primaryDirection: normalizeDirectionSafe(row.primaryDirection),
+      primaryDirection: normalizeDirection(row.primaryDirection) ?? 'model',
       primaryScore: row.primaryScore ?? 0,
       publishedAt: row.publishedAt?.toISOString() ?? '',
       clusterCount: row.clusterId
@@ -347,11 +348,38 @@ export class ArticleService {
       .from(directionScore)
       .where(eq(directionScore.articleId, id));
 
-    const items: DirectionScoreItem[] = scores.map((row) => ({
-      direction: normalizeDirectionSafe(row.direction),
-      totalScore: row.totalScore,
-      dimensionScores: row.dimensionScores as DimensionScores,
-    }));
+    const grouped = new Map<string, { totalScore: number; dimensionScores: DimensionScores }>();
+
+    for (const row of scores) {
+      const dir = normalizeDirection(row.direction);
+      if (!dir) continue;
+      const existing = grouped.get(dir);
+      const rowScores = (row.dimensionScores ?? {}) as DimensionScores;
+      if (existing) {
+        const merged: DimensionScores = { ...existing.dimensionScores };
+        for (const [k, v] of Object.entries(rowScores)) {
+          merged[k] = Math.max(merged[k] ?? 0, v as number);
+        }
+        grouped.set(dir, {
+          totalScore: Math.max(existing.totalScore, row.totalScore),
+          dimensionScores: merged,
+        });
+      } else {
+        grouped.set(dir, {
+          totalScore: row.totalScore,
+          dimensionScores: { ...rowScores },
+        });
+      }
+    }
+
+    const items: DirectionScoreItem[] = ALL_DIRECTION_IDS.map((dir) => {
+      const data = grouped.get(dir);
+      return {
+        direction: dir,
+        totalScore: data?.totalScore ?? 0,
+        dimensionScores: data?.dimensionScores ?? {},
+      };
+    });
 
     return { items };
   }

@@ -78,9 +78,6 @@ export function normalizeDirection(raw: string | null | undefined): Direction | 
   return null;
 }
 
-export function normalizeDirectionSafe(raw: string | null | undefined): Direction {
-  return normalizeDirection(raw) ?? 'model';
-}
 
 export function isValidDirection(value: string): value is Direction {
   return ALL_DIRECTION_IDS.includes(value as Direction);
