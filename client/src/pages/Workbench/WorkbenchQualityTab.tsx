@@ -27,6 +27,26 @@ const REASON_MAP: Record<QualityGateReason, { label: string; className: string }
     label: '无法溯源',
     className: 'bg-[hsl(220_12%_50%)] text-white border-transparent',
   },
+  same_url: {
+    label: 'URL重复',
+    className: 'bg-[hsl(45_55%_52%)] text-white border-transparent',
+  },
+  same_title: {
+    label: '标题重复',
+    className: 'bg-[hsl(45_55%_52%)] text-white border-transparent',
+  },
+  same_batch_url: {
+    label: '批次URL重复',
+    className: 'bg-[hsl(195_50%_50%)] text-white border-transparent',
+  },
+  same_batch_title: {
+    label: '批次标题重复',
+    className: 'bg-[hsl(195_50%_50%)] text-white border-transparent',
+  },
+  source_unreliable: {
+    label: '源不可靠',
+    className: 'bg-[hsl(0_48%_58%)] text-white border-transparent',
+  },
 };
 
 const WorkbenchQualityTab = () => {
@@ -62,6 +82,11 @@ const WorkbenchQualityTab = () => {
             <SelectItem value="all">全部原因</SelectItem>
             <SelectItem value="link_dead">链接失效</SelectItem>
             <SelectItem value="content_stale">内容陈旧</SelectItem>
+            <SelectItem value="same_url">URL重复</SelectItem>
+            <SelectItem value="same_title">标题重复</SelectItem>
+            <SelectItem value="same_batch_url">批次URL重复</SelectItem>
+            <SelectItem value="same_batch_title">批次标题重复</SelectItem>
+            <SelectItem value="source_unreliable">源不可靠</SelectItem>
             <SelectItem value="untraceable">无法溯源</SelectItem>
           </SelectContent>
         </Select>
@@ -90,7 +115,10 @@ const WorkbenchQualityTab = () => {
             </thead>
             <tbody>
               {items.map((item: QualityGateItem) => {
-                const reasonCfg = REASON_MAP[item.reason];
+                const reasonCfg = REASON_MAP[item.reason] ?? {
+                  label: item.reason,
+                  className: 'bg-[hsl(220_12%_50%)] text-white border-transparent',
+                };
                 return (
                   <tr
                     key={item.id}
@@ -107,7 +135,7 @@ const WorkbenchQualityTab = () => {
                         {reasonCfg.label}
                       </Badge>
                     </td>
-                    <td className="py-3 px-4 text-muted-foreground truncate max-w-[200px]">
+                    <td className="py-3 px-4 text-muted-foreground truncate max-w-[250px]">
                       {item.detail}
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">
