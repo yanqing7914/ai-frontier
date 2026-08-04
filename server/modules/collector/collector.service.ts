@@ -387,6 +387,25 @@ export class CollectorService {
       `${degradedCount} degraded to rule-based`,
     );
 
+    // 8.5 Auto-approve stuck pending_review articles
+    const autoApproveThreshold = await this.getConfig('auto_approve_threshold', 60);
+    const autoApproveHours = await this.getConfig('auto_approve_hours', 24);
+    const autoApproved = await this.db.execute(sql`
+      UPDATE article
+      SET status = 'draft'
+      WHERE status = 'pending_review'
+        AND collected_at < NOW() - (${autoApproveHours} || ' hours')::interval
+        AND (primary_score IS NOT NULL AND primary_score >= ${autoApproveThreshold})
+      RETURNING id
+    `);
+    const autoApprovedCount = (autoApproved as unknown as { id: string }[]).length;
+    if (autoApprovedCount > 0) {
+      this.logger.log(
+        `Auto-approved ${autoApprovedCount} stuck pending_review articles ` +
+        `(threshold=${autoApproveThreshold}, hours=${autoApproveHours})`,
+      );
+    }
+
     // 9. Publish decision
     const publishThreshold = await this.getConfig('publish_threshold', 75);
     let publishedCount = 0;
@@ -421,6 +440,19 @@ export class CollectorService {
 
     // 11. Daily digest
     await this.ensureDigest(today);
+
+    // 12. Auto-rescore pending articles if quota remains
+    const finalAiCount = await this.getAiCallCount(today);
+    if (finalAiCount < aiDailyLimit) {
+      this.logger.log(
+        `Auto-rescore: ${aiDailyLimit - finalAiCount} AI quota remaining, rescoring pending articles`,
+      );
+      const rescoreResult = await this.rescorePending();
+      this.logger.log(
+        `Auto-rescore: ${rescoreResult.succeeded} succeeded, ${rescoreResult.failed} failed`,
+      );
+      await this.selectForFrontPage();
+    }
 
     this.logger.log('Pipeline completed successfully');
   }

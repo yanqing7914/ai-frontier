@@ -55,14 +55,32 @@ export class ArticleService {
     const { page, pageSize, directions } = params;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [
+    const baseConditions = [
       eq(article.status, 'published'),
-      isNotNull(article.frontPageRank),
     ];
     if (directions && directions.length > 0) {
-      conditions.push(inArray(article.primaryDirection, directions));
+      baseConditions.push(inArray(article.primaryDirection, directions));
     }
-    const whereClause = and(...conditions);
+
+    const frontPageConditions = [
+      ...baseConditions,
+      isNotNull(article.frontPageRank),
+    ];
+    const frontPageWhere = and(...frontPageConditions);
+
+    const frontPageCountResult = await this.db
+      .select({ count: count() })
+      .from(article)
+      .where(frontPageWhere);
+    const frontPageCount = Number(frontPageCountResult[0]?.count ?? 0);
+
+    const useFallback = frontPageCount === 0;
+    const whereClause = useFallback
+      ? and(...baseConditions)
+      : frontPageWhere;
+    const orderClause = useFallback
+      ? [desc(article.primaryScore)]
+      : [article.frontPageRank];
 
     const rows = await this.db
       .select({
@@ -80,7 +98,7 @@ export class ArticleService {
       })
       .from(article)
       .where(whereClause)
-      .orderBy(article.frontPageRank)
+      .orderBy(...orderClause)
       .limit(pageSize)
       .offset(offset);
 
