@@ -98,7 +98,7 @@
 - **状态完整性**: Button/Input/Toggle/Badge 覆盖 Default/Hover/Focus/Active/Disabled；Focus 态用 `ring-2 ring-primary ring-offset-2`
 - **层级清晰**: Primary 按钮填充 `bg-primary`；Secondary/Ghost 用 `border-border hover:bg-accent`；总分数字永远是页面最大最醒目的数据元素
 - **一致性**: 所有标签(Badge)统一 `rounded-full px-2.5 py-0.5 text-xs font-medium`；表格行高统一 `h-12`；卡片内边距统一 `p-5`
-- **源分类体系**: feed_source 按 source_category 分为 8 大类：research_papers/official_releases/open_source_community/eval_data/infrastructure_industry/policy_safety/media_analysis/newsletters_podcasts
+- **源分类体系**: feed_source 按 source_category 分为 8 大类（中文展示 + 英文 source_category_id）：论文研究(research_papers) / 官方发布(official_release) / 开源社区(open_source_community) / 评测数据(evaluation_data) / 基础设施产业链(infrastructure_supply_chain) / 政策安全治理(policy_safety_governance) / 媒体分析(media_analysis) / 访谈播客(interviews_podcasts)
 - **数据展示**: 数字一律用 JetBrains Mono；百分比/分数右对齐；状态标签左对齐；URL 文本 `truncate` + tooltip 展开
 
 ## 7. Image Direction (图片与视觉资产，按需)

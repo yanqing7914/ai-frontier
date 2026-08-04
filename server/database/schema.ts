@@ -321,6 +321,7 @@ export const feedSource = pgTable("feed_source", {
   primaryDirectionId: varchar("primary_direction_id", { length: 50 }),
   directionIds: text("direction_ids").array().default([]),
   sourceLayer: varchar("source_layer", { length: 50 }),
+  notes: text("notes"),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
