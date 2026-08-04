@@ -6,12 +6,14 @@ import NotFound from './pages/NotFound/NotFound';
 import TodayHot from './pages/TodayHot/TodayHot';
 import Workbench from './pages/Workbench/Workbench';
 import SourceManage from './pages/SourceManage/SourceManage';
+import TrendingPage from './pages/Trending/TrendingPage';
 
 const RoutesComponent = () => {
   return (
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<TodayHot />} />
+        <Route path="trending" element={<TrendingPage />} />
         <Route path="workbench" element={<Workbench />} />
         <Route path="sources" element={<SourceManage />} />
       </Route>

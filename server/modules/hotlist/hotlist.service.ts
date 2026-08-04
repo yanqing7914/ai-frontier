@@ -72,6 +72,10 @@ export class HotlistService {
     });
   }
 
+  clearCache(key: string): void {
+    this.cache.delete(key);
+  }
+
   // ─── DB snapshot helpers ─────────────────────────────────────
 
   private async saveSnapshot(

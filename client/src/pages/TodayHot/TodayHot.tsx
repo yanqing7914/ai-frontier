@@ -8,7 +8,7 @@ import {
   EmptyDescription,
   EmptyMedia,
 } from '@/components/ui/empty';
-import { Flame, Calendar, ExternalLink, FileText, TrendingUp } from 'lucide-react';
+import { Flame, Calendar, ExternalLink, FileText } from 'lucide-react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
@@ -16,7 +16,6 @@ import { toast } from 'sonner';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { getHotArticles } from '@/api/article';
 import { DigestDialog } from './TodayHotDigestDialog';
-import { TodayHotTrendingDrawer } from './TodayHotTrendingDrawer';
 import type { HotArticleItem, Direction } from '@shared/api.interface';
 import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
 
@@ -40,7 +39,6 @@ const TodayHot = () => {
   const [total, setTotal] = useState<number>(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [digestOpen, setDigestOpen] = useState<boolean>(false);
-  const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
 
   const fetchArticles = useCallback((): void => {
     setLoading(true);
@@ -95,14 +93,6 @@ const TodayHot = () => {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDrawerOpen(true)}
-            >
-              <TrendingUp className="size-4" />
-              热榜
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -227,11 +217,6 @@ const TodayHot = () => {
         open={digestOpen}
         onOpenChange={setDigestOpen}
         directions={DIRECTIONS}
-      />
-
-      <TodayHotTrendingDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
       />
     </div>
   );
