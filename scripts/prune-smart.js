@@ -6,6 +6,13 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
+
+// 加载提交的 .env，供读取构建期配置（如 MIAODA_RUNTIME_ENTRIES）。dotenv 不一定安装 → 静默降级。
+try {
+  require('dotenv').config({ path: path.join(ROOT_DIR, '.env') });
+} catch {
+  // dotenv 未安装：跳过；MIAODA_RUNTIME_ENTRIES 仍可来自真实环境变量
+}
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const DIST_SERVER_DIR = path.join(DIST_DIR, 'server');
 const ROOT_PACKAGE_JSON = path.join(ROOT_DIR, 'package.json');
@@ -15,6 +22,36 @@ const OUT_PACKAGE_JSON = path.join(DIST_DIR, 'package.json');
 
 // Server 入口文件
 const SERVER_ENTRY = path.join(DIST_SERVER_DIR, 'main.js');
+
+// nest sourceRoot（源码根，默认 server）：把 .env 里声明的源码路径映射到构建产物位置
+let SOURCE_ROOT = 'server';
+try {
+  const nestCli = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'nest-cli.json'), 'utf8'));
+  if (nestCli.sourceRoot) SOURCE_ROOT = nestCli.sourceRoot;
+} catch {
+  // 读不到 nest-cli.json 则用默认 server
+}
+const SRC_TO_OUT_EXT = { '.mts': '.mjs', '.cts': '.cjs', '.ts': '.js' };
+
+// 额外 trace 入口：经 new Function/动态 import 加载、nft 无法从 main.js 静态发现的 ESM runtime。
+// 应用在提交的 .env 里用 MIAODA_RUNTIME_ENTRIES 声明【源码路径】（相对项目根，逗号分隔），例如：
+//   MIAODA_RUNTIME_ENTRIES=server/modules/ethics/runtime/review-run.mjs,server/modules/ethics/runtime/parse-core.mjs
+// 脚本按 nest sourceRoot 自动映射到 dist/server 下的构建产物（并重写 .mts→.mjs / .ts→.js）。
+const RUNTIME_ENTRIES = (process.env.MIAODA_RUNTIME_ENTRIES || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((srcRel) => {
+    const fromSrc = path.relative(SOURCE_ROOT, srcRel); // 去掉 sourceRoot 前缀
+    const ext = path.extname(fromSrc);
+    const outRel = SRC_TO_OUT_EXT[ext] ? fromSrc.slice(0, -ext.length) + SRC_TO_OUT_EXT[ext] : fromSrc;
+    return path.join(DIST_SERVER_DIR, outRel);
+  })
+  .filter((p) => {
+    if (fs.existsSync(p)) return true;
+    console.warn(`⚠️  MIAODA_RUNTIME_ENTRIES 入口在构建产物中不存在，已忽略: ${path.relative(ROOT_DIR, p)}`);
+    return false;
+  });
 
 // Node.js 内置模块列表
 const BUILTIN_MODULES = new Set([
@@ -145,12 +182,15 @@ async function smartPrune() {
   }
 
   console.log(`📂 分析入口文件: ${path.relative(ROOT_DIR, SERVER_ENTRY)}`);
+  if (RUNTIME_ENTRIES.length) {
+    console.log(`📎 额外 trace 入口 (${RUNTIME_ENTRIES.length}): ${RUNTIME_ENTRIES.map((p) => path.relative(DIST_SERVER_DIR, p)).join(', ')}`);
+  }
 
   // 2. 使用 @vercel/nft 追踪依赖
   console.log('🔎 追踪实际依赖...');
   const analyzeStart = Date.now();
 
-  const { fileList } = await nodeFileTrace([SERVER_ENTRY], {
+  const { fileList } = await nodeFileTrace([SERVER_ENTRY, ...RUNTIME_ENTRIES], {
     base: ROOT_DIR,
     processCwd: ROOT_DIR,
     ts: false, // 禁用 TS 解析
