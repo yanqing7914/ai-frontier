@@ -197,9 +197,9 @@ export class CollectorService {
       `Tracing: needed=${traceNeeded}, success=${traceSuccess}, failed=${traceFailed}`,
     );
 
-    // 6. Link dead check
+    // 6. Link dead check (parallelized, concurrency=10)
     const linkAlive: NewArticleInfo[] = [];
-    for (const art of articlesForScoring) {
+    await this.processBatch(articlesForScoring, 10, async (art) => {
       const finalUrl = await this.getFinalUrl(art.id);
       const alive = await this.checkLinkAlive(finalUrl);
       if (!alive.alive) {
@@ -215,7 +215,7 @@ export class CollectorService {
       } else {
         linkAlive.push(art);
       }
-    }
+    });
     this.logger.log(
       `${linkAlive.length} passed link alive check`,
     );
