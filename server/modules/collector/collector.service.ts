@@ -121,7 +121,7 @@ export class CollectorService {
 
     const concurrency = await this.getConfig('fetch_concurrency', 3);
     const retryCount = await this.getConfig('fetch_retry_count', 3);
-    const aiDailyLimit = await this.getConfig('ai_daily_limit', 100);
+    const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
     const today = new Date().toISOString().split('T')[0];
 
     this.logger.log(
@@ -223,16 +223,65 @@ export class CollectorService {
     // 7. Cluster
     await this.clusterArticles(linkAlive);
 
-    // 8. AI scoring
+    // 8. AI scoring (with per-source quota and tier-priority sorting)
+    const aiPerSourceLimit = await this.getConfig('ai_per_source_limit', 30);
     let aiCount = await this.getAiCallCount(today);
-    for (const art of linkAlive) {
+
+    const tierMap = new Map<string, string>();
+    for (const s of sources) {
+      tierMap.set(s.id, s.tier);
+    }
+    const sourceNameMap = new Map<string, string>();
+    for (const s of sources) {
+      sourceNameMap.set(s.id, s.name);
+    }
+
+    const perSourceCount = new Map<string, number>();
+    const todayAiArticles = await this.db
+      .select({ sourceName: article.sourceName })
+      .from(article)
+      .where(
+        and(
+          eq(article.aiProcessed, true),
+          sql`${article.collectedAt}::date = ${today}::date`,
+        ),
+      );
+    for (const row of todayAiArticles) {
+      perSourceCount.set(
+        row.sourceName,
+        (perSourceCount.get(row.sourceName) || 0) + 1,
+      );
+    }
+
+    const TIER_PRIORITY: Record<string, number> = {
+      authoritative: 0,
+      validation: 1,
+      signal: 2,
+    };
+    const sortedForScoring = [...linkAlive].sort((a, b) => {
+      const tierA = tierMap.get(a.feedSourceId) ?? 'signal';
+      const tierB = tierMap.get(b.feedSourceId) ?? 'signal';
+      const pA = TIER_PRIORITY[tierA] ?? 2;
+      const pB = TIER_PRIORITY[tierB] ?? 2;
+      if (pA !== pB) return pA - pB;
+      const nameA = sourceNameMap.get(a.feedSourceId) ?? '';
+      const nameB = sourceNameMap.get(b.feedSourceId) ?? '';
+      const cntA = perSourceCount.get(nameA) || 0;
+      const cntB = perSourceCount.get(nameB) || 0;
+      return cntA - cntB;
+    });
+
+    let degradedCount = 0;
+    for (const art of sortedForScoring) {
       const source = sources.find((s) => s.id === art.feedSourceId);
       const tier = source?.tier ?? 'signal';
+      const srcName = source?.name ?? 'unknown';
+      const srcUsed = perSourceCount.get(srcName) || 0;
 
       let result;
       let aiUsed = false;
 
-      if (aiCount < aiDailyLimit) {
+      if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit) {
         try {
           result = await this.aiScoringService.scoreArticle(
             art.title,
@@ -261,11 +310,26 @@ export class CollectorService {
           };
         }
       } else {
-        result = this.aiScoringService.ruleBasedScore(
-          art.title,
-          art.content,
-          tier,
-        );
+        if (aiCount >= aiDailyLimit) {
+          result = {
+            ...this.aiScoringService.ruleBasedScore(
+              art.title,
+              art.content,
+              tier,
+            ),
+            degradeReason: 'ai_daily_limit_reached',
+          };
+        } else {
+          result = {
+            ...this.aiScoringService.ruleBasedScore(
+              art.title,
+              art.content,
+              tier,
+            ),
+            degradeReason: `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`,
+          };
+        }
+        degradedCount++;
       }
 
       for (const dir of DIRECTIONS) {
@@ -312,9 +376,16 @@ export class CollectorService {
 
       if (aiUsed) {
         aiCount++;
+        perSourceCount.set(srcName, (perSourceCount.get(srcName) || 0) + 1);
         await this.incrementAiCount(today);
       }
     }
+
+    this.logger.log(
+      `AI scoring: ${aiCount}/${aiDailyLimit} used today, ` +
+      `${aiPerSourceLimit} max per source, ` +
+      `${degradedCount} degraded to rule-based`,
+    );
 
     // 9. Publish decision
     const publishThreshold = await this.getConfig('publish_threshold', 75);
@@ -925,6 +996,171 @@ export class CollectorService {
     this.logger.log(
       `Front page: selected ${selected.length}/${rows.length} candidates`,
     );
+  }
+
+  // ─── Rescore Pending (AI 补打分) ────────────────────────────
+
+  async rescorePending(): Promise<{
+    rescored: number;
+    succeeded: number;
+    failed: number;
+  }> {
+    const today = new Date().toISOString().split('T')[0];
+    const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
+    const aiPerSourceLimit = await this.getConfig('ai_per_source_limit', 30);
+    let aiCount = await this.getAiCallCount(today);
+
+    const pendingArticles = await this.db
+      .select({
+        id: article.id,
+        title: article.title,
+        sourceName: article.sourceName,
+        feedSourceId: article.feedSourceId,
+      })
+      .from(article)
+      .where(
+        and(
+          eq(article.aiProcessed, false),
+          sql`${article.publishedAt} > NOW() - INTERVAL '7 days'`,
+          sql`${article.sourceName} != 'arXiv cs.AI'`,
+        ),
+      );
+
+    this.logger.log(
+      `Rescore pending: found ${pendingArticles.length} articles, ` +
+      `ai count today: ${aiCount}/${aiDailyLimit}`,
+    );
+
+    const sourceTiers = new Map<string, string>();
+    const allSources = await this.db.select().from(feedSource);
+    for (const s of allSources) {
+      sourceTiers.set(s.id, s.tier);
+    }
+
+    const perSourceCount = new Map<string, number>();
+    const todayAiArticles = await this.db
+      .select({ sourceName: article.sourceName })
+      .from(article)
+      .where(
+        and(
+          eq(article.aiProcessed, true),
+          sql`${article.collectedAt}::date = ${today}::date`,
+        ),
+      );
+    for (const row of todayAiArticles) {
+      perSourceCount.set(
+        row.sourceName,
+        (perSourceCount.get(row.sourceName) || 0) + 1,
+      );
+    }
+
+    let rescored = 0;
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const art of pendingArticles) {
+      if (aiCount >= aiDailyLimit) {
+        this.logger.log('Rescore: daily AI limit reached, stopping');
+        break;
+      }
+      const srcUsed = perSourceCount.get(art.sourceName) || 0;
+      if (srcUsed >= aiPerSourceLimit) {
+        this.logger.log(
+          `Rescore: per-source limit reached for ${art.sourceName} (${srcUsed}/${aiPerSourceLimit})`,
+        );
+        continue;
+      }
+
+      const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
+      const [fullArt] = await this.db
+        .select()
+        .from(article)
+        .where(eq(article.id, art.id));
+
+      if (!fullArt) continue;
+
+      const content = fullArt.summary || art.title;
+
+      try {
+        const result = await this.aiScoringService.scoreArticle(
+          art.title,
+          content,
+          tier,
+        );
+
+        if (!result.aiProcessed) {
+          failed++;
+          continue;
+        }
+
+        await this.db
+          .delete(directionScore)
+          .where(eq(directionScore.articleId, art.id));
+
+        for (const dir of DIRECTIONS) {
+          const dimScores = result.scores[dir] ?? {
+            novelty: 0, depth: 0, impact: 0, authority: 0, timeliness: 0,
+          };
+          const totalScore =
+            dimScores.novelty + dimScores.depth + dimScores.impact +
+            dimScores.authority + dimScores.timeliness;
+
+          await this.db.insert(directionScore).values({
+            articleId: art.id,
+            direction: dir,
+            dimensionScores: dimScores,
+            totalScore,
+          });
+        }
+
+        let primaryDir: string = DIRECTIONS[0];
+        let primaryScore = 0;
+        for (const dir of DIRECTIONS) {
+          const dim = result.scores[dir];
+          if (dim) {
+            const total =
+              dim.novelty + dim.depth + dim.impact +
+              dim.authority + dim.timeliness;
+            if (total > primaryScore) {
+              primaryScore = total;
+              primaryDir = dir;
+            }
+          }
+        }
+
+        await this.db
+          .update(article)
+          .set({
+            primaryDirection: primaryDir,
+            primaryScore,
+            summary: result.summary,
+            aiProcessed: true,
+            aiDegradeReason: null,
+          })
+          .where(eq(article.id, art.id));
+
+        aiCount++;
+        rescored++;
+        succeeded++;
+        perSourceCount.set(
+          art.sourceName,
+          (perSourceCount.get(art.sourceName) || 0) + 1,
+        );
+        await this.incrementAiCount(today);
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Rescore failed for "${art.title}": ${errMsg}`,
+        );
+        failed++;
+      }
+    }
+
+    this.logger.log(
+      `Rescore completed: ${rescored} rescored, ${succeeded} succeeded, ${failed} failed`,
+    );
+
+    return { rescored, succeeded, failed };
   }
 
   // ─── Config Helpers ───────────────────────────────────────

@@ -31,4 +31,27 @@ export class CollectorController {
       return { ok: false, message: errMsg };
     }
   }
+
+  @NeedLogin()
+  @Post('rescore-pending')
+  async rescorePending(): Promise<{
+    ok: boolean;
+    message: string;
+    rescored: number;
+    succeeded: number;
+    failed: number;
+  }> {
+    try {
+      const result = await this.collectorService.rescorePending();
+      return {
+        ok: true,
+        message: `Rescore completed: ${result.succeeded} succeeded, ${result.failed} failed`,
+        ...result,
+      };
+    } catch (error: unknown) {
+      const errMsg =
+        error instanceof Error ? error.message : String(error);
+      return { ok: false, message: errMsg, rescored: 0, succeeded: 0, failed: 0 };
+    }
+  }
 }
