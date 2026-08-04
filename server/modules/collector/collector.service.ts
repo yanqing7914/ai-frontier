@@ -29,6 +29,7 @@ import {
   ALL_DIRECTION_IDS as DIRECTIONS,
   normalizeDirection,
 } from '@shared/directions';
+import { canPublishArticle } from './publish-gate';
 
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
@@ -1168,43 +1169,56 @@ export class CollectorService {
     if (articles.length === 0) return 0;
     const articleIds = articles.map((a) => a.id);
 
-    const evidenceRows = await this.db
-      .select({ articleId: directionScore.articleId })
-      .from(directionScore)
-      .where(
-        and(
-          inArray(directionScore.articleId, articleIds),
-          gte(directionScore.totalScore, 20),
-        ),
-      );
-    const evidenceSet = new Set(evidenceRows.map((r) => r.articleId));
+    const allArticles = await this.db
+      .select({
+        id: article.id,
+        primaryDirection: article.primaryDirection,
+        primaryScore: article.primaryScore,
+        status: article.status,
+      })
+      .from(article)
+      .where(inArray(article.id, articleIds));
+
+    const primaryDirScores = await this.db.execute(sql`
+      SELECT ds.article_id, ds.dimension_scores
+      FROM direction_score ds
+      JOIN article a ON ds.article_id = a.id AND ds.direction = a.primary_direction
+      WHERE ds.article_id = ANY(${sql.join(articleIds.map((id) => sql`${id}`), sql`, `)}::uuid[])
+    `) as unknown as { article_id: string; dimension_scores: Record<string, number> }[];
+
+    const scoreMap = new Map<string, Record<string, number>>();
+    for (const row of primaryDirScores) {
+      scoreMap.set(row.article_id, row.dimension_scores ?? {});
+    }
 
     let publishedCount = 0;
-    for (const art of articles) {
-      if (!evidenceSet.has(art.id)) continue;
+    for (const art of allArticles) {
+      const passes = canPublishArticle({
+        primaryDirection: art.primaryDirection,
+        primaryScore: art.primaryScore,
+        status: art.status,
+        dimensionScores: scoreMap.get(art.id) ?? null,
+        publishThreshold,
+      });
 
-      const [current] = await this.db
-        .select({
-          primaryDirection: article.primaryDirection,
-          primaryScore: article.primaryScore,
-          status: article.status,
-        })
-        .from(article)
-        .where(eq(article.id, art.id));
-
-      if (
-        current
-        && current.primaryDirection
-        && (current.primaryScore ?? 0) >= publishThreshold
-        && current.status !== 'pending_review'
-        && current.status !== 'blocked'
-        && current.status !== 'published'
-      ) {
+      if (passes && art.status !== 'published') {
         await this.db
           .update(article)
           .set({ status: 'published' })
           .where(eq(article.id, art.id));
         publishedCount++;
+      } else if (!passes) {
+        const updates: Record<string, unknown> = { frontPageRank: null };
+        if (
+          art.status === 'published'
+          && art.primaryDirection !== null
+        ) {
+          updates.status = 'draft';
+        }
+        await this.db
+          .update(article)
+          .set(updates)
+          .where(eq(article.id, art.id));
       }
     }
 
