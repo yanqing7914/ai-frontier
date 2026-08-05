@@ -22,15 +22,31 @@ import {
   shouldTrace,
   traceFromRssContent,
 } from './trace-engine';
-import { parseFeed } from './parsers';
+import { fetchRawContent, parseRawContent } from './parsers';
 import { normalizeItems } from './pipeline-normalize';
 import { dedupBatch, filterAgainstExisting } from './pipeline-dedup';
 import * as crypto from 'crypto';
 import {
   ALL_DIRECTION_IDS as DIRECTIONS,
-  normalizeDirection,
 } from '@shared/directions';
 import { canPublishArticle } from './publish-gate';
+
+export const PIPELINE_STAGE_ORDER = [
+  'source_snapshot',
+  'fetch',
+  'parse',
+  'normalize',
+  'url_dedup',
+  'trace',
+  'classify',
+  'cluster',
+  'rule_score',
+  'ai_score',
+  'quality_gate',
+  'publish',
+] as const;
+
+export type PipelineStage = typeof PIPELINE_STAGE_ORDER[number];
 
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
@@ -44,6 +60,25 @@ interface PipelineArticle {
   feedSourceId: string;
   sourceUrl: string;
   sourceTier: string;
+}
+
+interface RawFetchResponse {
+  feedSourceId: string;
+  feedType: string;
+  url: string;
+  sourceName: string;
+  sourceTier: string;
+  rawContent: string;
+  byteLength: number;
+  httpStatus: number;
+}
+
+interface RuleClassification {
+  primaryDirection: string | null;
+  publishScore: number;
+  summary: string;
+  degradeReason: string | null;
+  directionScores: Record<string, { dimensionScores: Record<string, number>; normalizedScore: number }>;
 }
 
 function jaccardSimilarity(text1: string, text2: string): number {
@@ -97,49 +132,35 @@ export class CollectorService {
   }
 
   private async executeFullPipeline(): Promise<void> {
-    this.logger.log('Pipeline started');
+    this.logger.log(`Pipeline started [${PIPELINE_STAGE_ORDER.length} stages]`);
     const today = new Date().toISOString().split('T')[0];
     const concurrency = await this.getConfig('fetch_concurrency', 3);
     const retryCount = await this.getConfig('fetch_retry_count', 3);
     const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
 
-    // ── Stage 1: Source Snapshot ──
+    // ── Stage 1/12: source_snapshot ──
     const sources = await this.db
       .select()
       .from(feedSource)
       .where(eq(feedSource.enabled, true));
-
     if (sources.length === 0) {
-      this.logger.log('Stage 1: No enabled sources');
+      this.logger.log('[1/12] source_snapshot: 0 enabled sources');
       await this.ensureDigest(today);
       return;
     }
-    this.logger.log(`Stage 1: ${sources.length} enabled sources`);
+    this.logger.log(`[1/12] source_snapshot: ${sources.length} enabled sources`);
 
-    // ── Stage 2: Scheduled Fetch ──
-    const allParsedItems: {
-      items: Array<{ title: string; url: string; canonicalUrl?: string; publishedAt: Date | null; content: string; rawContent: string }>;
-      feedSourceId: string;
-      sourceName: string;
-      sourceTier: string;
-    }[] = [];
+    // ── Stage 2/12: fetch (raw content + stats) ──
+    const rawResponses: RawFetchResponse[] = [];
     let fetchOk = 0;
     let fetchFail = 0;
+    let fetchBytesTotal = 0;
 
     await this.processBatch(sources, concurrency, async (source) => {
-      let parsed = null;
+      let raw: Awaited<ReturnType<typeof fetchRawContent>> | null = null;
       for (let attempt = 1; attempt <= retryCount; attempt++) {
         try {
-          const result = await parseFeed(source.feedType, source.url);
-          if (result.error) {
-            if (attempt === retryCount) {
-              await this.feedSourceService.updateFetchStats(source.id, false, result.error);
-              return;
-            }
-            await this.sleep(1000 * Math.pow(2, attempt - 1));
-            continue;
-          }
-          parsed = result;
+          raw = await fetchRawContent(source.url);
           break;
         } catch (error: unknown) {
           const errMsg = error instanceof Error ? error.message : String(error);
@@ -151,25 +172,60 @@ export class CollectorService {
           await this.sleep(1000 * Math.pow(2, attempt - 1));
         }
       }
-      if (parsed && parsed.items.length > 0) {
+      if (raw) {
         await this.feedSourceService.updateFetchStats(source.id, true);
         fetchOk++;
-        allParsedItems.push({
-          items: parsed.items,
+        fetchBytesTotal += raw.byteLength;
+        rawResponses.push({
           feedSourceId: source.id,
+          feedType: source.feedType,
+          url: source.url,
           sourceName: source.name,
           sourceTier: source.tier,
+          rawContent: raw.content,
+          byteLength: raw.byteLength,
+          httpStatus: raw.httpStatus,
         });
       } else {
         fetchFail++;
-        if (parsed) {
-          await this.feedSourceService.updateFetchStats(source.id, false, 'No items in feed');
-        }
       }
     });
-    this.logger.log(`Stage 2: fetch ok=${fetchOk}, fail=${fetchFail}`);
+    this.logger.log(`[2/12] fetch: ok=${fetchOk}, fail=${fetchFail}, bytes=${fetchBytesTotal}`);
 
-    // ── Stage 3: Standardize ──
+    if (rawResponses.length === 0) {
+      this.logger.log('No successful fetches, pipeline ends');
+      await this.ensureDigest(today);
+      return;
+    }
+
+    // ── Stage 3/12: parse (dispatch by feed_type) ──
+    const allParsedItems: Array<{
+      items: Array<{ title: string; url: string; canonicalUrl?: string; publishedAt: Date | null; content: string; rawContent: string }>;
+      feedSourceId: string;
+      sourceName: string;
+      sourceTier: string;
+    }> = [];
+    let parseOk = 0;
+    let parseFail = 0;
+
+    for (const resp of rawResponses) {
+      const result = await parseRawContent(resp.feedType, resp.rawContent, resp.url);
+      if (result.error || result.items.length === 0) {
+        parseFail++;
+        await this.feedSourceService.updateFetchStats(resp.feedSourceId, false, result.error || 'No items in feed');
+      } else {
+        parseOk++;
+        allParsedItems.push({
+          items: result.items,
+          feedSourceId: resp.feedSourceId,
+          sourceName: resp.sourceName,
+          sourceTier: resp.sourceTier,
+        });
+      }
+    }
+    this.logger.log(`[3/12] parse: ok=${parseOk}, fail=${parseFail}, items=${allParsedItems.reduce((s: number, b) => s + b.items.length, 0)}`);
+
+    // ── Stage 4/12: normalize ──
     let allNormalized: Array<{
       title: string; url: string; originalUrl: string; canonicalUrl: string | null;
       contentHash: string; content: string; rawContent: string; publishedAt: Date | null;
@@ -185,9 +241,9 @@ export class CollectorService {
       allNormalized = allNormalized.concat(result.items);
       normalizeDropped += result.dropped;
     }
-    this.logger.log(`Stage 3: normalized=${allNormalized.length}, dropped=${normalizeDropped}`);
+    this.logger.log(`[4/12] normalize: passed=${allNormalized.length}, dropped=${normalizeDropped}`);
 
-    // ── Stage 4: URL Dedup ──
+    // ── Stage 5/12: url_dedup ──
     const recentArticles = await this.db
       .select({ url: article.url, contentHash: article.contentHash })
       .from(article)
@@ -205,19 +261,15 @@ export class CollectorService {
     }));
 
     const dedupInput = allNormalized.map((n) => ({
-      url: n.url,
-      contentHash: n.contentHash,
-      title: n.title,
+      url: n.url, contentHash: n.contentHash, title: n.title,
     }));
-
     const dbFiltered = filterAgainstExisting(dedupInput, existingHashes, existingUrls);
     const batchDedup = dedupBatch(dbFiltered.passed);
     const totalDeduped = dbFiltered.deduped + batchDedup.deduped;
 
     const newItemsMap = new Map(batchDedup.passed.map((p) => [p.contentHash, allNormalized.find((n) => n.contentHash === p.contentHash)!]));
     const newItems = batchDedup.passed.map((p) => newItemsMap.get(p.contentHash)!).filter(Boolean);
-
-    this.logger.log(`Stage 4: passed=${newItems.length}, deduped=${totalDeduped}`);
+    this.logger.log(`[5/12] url_dedup: passed=${newItems.length}, deduped=${totalDeduped}`);
 
     if (newItems.length === 0) {
       this.logger.log('No new articles after dedup');
@@ -253,7 +305,7 @@ export class CollectorService {
     }
     this.logger.log(`Inserted ${allNewArticles.length} new articles`);
 
-    // ── Stage 5: Origin Tracing ──
+    // ── Stage 6/12: trace ──
     let traceNeeded = 0;
     let traceOk = 0;
     let traceFail = 0;
@@ -271,49 +323,34 @@ export class CollectorService {
         traceFailIds.add(art.id);
       }
     }
-    this.logger.log(`Stage 5: needed=${traceNeeded}, ok=${traceOk}, fail=${traceFail}`);
+    this.logger.log(`[6/12] trace: needed=${traceNeeded}, ok=${traceOk}, fail=${traceFail}`);
 
-    // ── Stage 6: Content Classification (rule-based, before clustering) ──
+    // ── Stage 7/12: classify (topic classification only, no direction_score) ──
     let classOk = 0;
     let classDegraded = 0;
-    const classifiedArticles: PipelineArticle[] = [];
+    const classificationResults = new Map<string, RuleClassification>();
 
     for (const art of allNewArticles) {
       try {
         const source = sources.find((s) => s.id === art.feedSourceId);
         const tier = source?.tier ?? 'signal';
         const ruleResult = this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier);
-
-        await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
-        for (const dir of DIRECTIONS) {
-          const ev = ruleResult.directionScores[dir];
-          await this.db.insert(directionScore).values({
-            articleId: art.id,
-            direction: dir,
-            dimensionScores: ev?.dimensionScores ?? {},
-            totalScore: ev?.normalizedScore ?? 0,
-          });
-        }
+        classificationResults.set(art.id, ruleResult);
 
         const setStatus = traceFailIds.has(art.id) ? 'pending_review' : undefined;
-        const articleStatus = (!ruleResult.primaryDirection && !setStatus) ? 'draft'
-          : setStatus ?? undefined;
-
         await this.db.update(article).set({
           primaryDirection: ruleResult.primaryDirection,
           primaryScore: ruleResult.publishScore,
           summary: ruleResult.summary,
           aiProcessed: false,
           aiDegradeReason: ruleResult.degradeReason,
-          ...(articleStatus ? { status: articleStatus } : {}),
+          ...(setStatus ? { status: setStatus } : {}),
         }).where(eq(article.id, art.id));
 
         if (traceFailIds.has(art.id)) {
           await this.createReviewItem(art.id);
         }
-
         classOk++;
-        classifiedArticles.push(art);
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Classification failed for "${art.title}": ${errMsg}`);
@@ -322,16 +359,41 @@ export class CollectorService {
           await this.db.update(article).set({ status: 'pending_review' }).where(eq(article.id, art.id));
           await this.createReviewItem(art.id);
         }
-        classifiedArticles.push(art);
       }
     }
-    this.logger.log(`Stage 6: classified=${classOk}, degraded=${classDegraded}`);
+    this.logger.log(`[7/12] classify: ok=${classOk}, degraded=${classDegraded}`);
 
-    // ── Stage 7: Event Clustering ──
-    await this.clusterArticles(classifiedArticles);
-    this.logger.log(`Stage 7: clustering completed for ${classifiedArticles.length} articles`);
+    // ── Stage 8/12: cluster ──
+    await this.clusterArticles(allNewArticles);
+    this.logger.log(`[8/12] cluster: ${allNewArticles.length} articles`);
 
-    // ── Stage 8: AI Scoring (enhance rule results) ──
+    // ── Stage 9/12: rule_score (9 unique direction scores per article) ──
+    let ruleOk = 0;
+    let ruleFail = 0;
+    for (const art of allNewArticles) {
+      const result = classificationResults.get(art.id);
+      if (!result) { ruleFail++; continue; }
+      try {
+        await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
+        for (const dir of DIRECTIONS) {
+          const ev = result.directionScores[dir];
+          await this.db.insert(directionScore).values({
+            articleId: art.id,
+            direction: dir,
+            dimensionScores: ev?.dimensionScores ?? {},
+            totalScore: ev?.normalizedScore ?? 0,
+          });
+        }
+        ruleOk++;
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Rule score failed for "${art.title}": ${errMsg}`);
+        ruleFail++;
+      }
+    }
+    this.logger.log(`[9/12] rule_score: ok=${ruleOk}, fail=${ruleFail}`);
+
+    // ── Stage 10/12: ai_score (AI enhancement + summary, fallback to rule) ──
     const aiPerSourceLimit = await this.getConfig('ai_per_source_limit', 30);
     let aiCount = await this.getAiCallCount(today);
 
@@ -352,7 +414,7 @@ export class CollectorService {
     }
 
     const TIER_PRIORITY: Record<string, number> = { authoritative: 0, validation: 1, signal: 2 };
-    const sortedForScoring = [...classifiedArticles].sort((a, b) => {
+    const sortedForScoring = [...allNewArticles].sort((a, b) => {
       const pA = TIER_PRIORITY[tierMap.get(a.feedSourceId) ?? 'signal'] ?? 2;
       const pB = TIER_PRIORITY[tierMap.get(b.feedSourceId) ?? 'signal'] ?? 2;
       if (pA !== pB) return pA - pB;
@@ -414,11 +476,19 @@ export class CollectorService {
         await this.incrementAiCount(today);
       }
     }
-    this.logger.log(`Stage 8: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
+    this.logger.log(`[10/12] ai_score: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
 
-    // Auto-approve stuck pending_review
-    const autoApproveThreshold = await this.getConfig('auto_approve_threshold', 60);
+    // Rescore pending articles (before quality gate, not after publish)
+    const rescoreResult = await this.rescorePending();
+    this.logger.log(`Rescore pre-gate: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
+
+    // ── Stage 11/12: quality_gate ──
+    const publishThreshold = await this.getConfig('publish_threshold', 75);
+    const minSuccessRate = await this.getConfig('source_min_success_rate', 30);
+    const maxConsecFail = await this.getConfig('source_max_consecutive_failures', 5);
+
     const autoApproveHours = await this.getConfig('auto_approve_hours', 24);
+    const autoApproveThreshold = await this.getConfig('auto_approve_threshold', 60);
     const autoApproved = await this.db.execute(sql`
       UPDATE article SET status = 'draft'
       WHERE status = 'pending_review'
@@ -429,21 +499,14 @@ export class CollectorService {
     `);
     const autoApprovedCount = (autoApproved as unknown as { id: string }[]).length;
     if (autoApprovedCount > 0) {
-      this.logger.log(`Auto-approved ${autoApprovedCount} stuck pending_review articles`);
+      this.logger.log(`Auto-approved ${autoApprovedCount} stuck pending_review`);
     }
 
-    // ── Stage 9: Unified Quality Gate ──
-    const publishThreshold = await this.getConfig('publish_threshold', 75);
-    const minSuccessRate = await this.getConfig('source_min_success_rate', 30);
-    const maxConsecFail = await this.getConfig('source_max_consecutive_failures', 5);
-
+    const allArticleIds = allNewArticles.map((a) => a.id);
     let gateStale = 0;
     let gateUnreliable = 0;
     let gateDead = 0;
-    let gateDup = 0;
-    let gatePassed = 0;
 
-    const allArticleIds = allNewArticles.map((a) => a.id);
     const articlesForGate = await this.db
       .select({ id: article.id, title: article.title, url: article.url, status: article.status, publishedAt: article.publishedAt, feedSourceId: article.feedSourceId })
       .from(article)
@@ -460,7 +523,6 @@ export class CollectorService {
       let blockReason = '';
       let blockDetail = '';
 
-      // Stale
       if (artRow.publishedAt) {
         const pubTime = artRow.publishedAt instanceof Date ? artRow.publishedAt.getTime() : new Date(artRow.publishedAt).getTime();
         if (pubTime < Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000) {
@@ -471,7 +533,6 @@ export class CollectorService {
         }
       }
 
-      // Source reliability
       if (!blocked) {
         const [src] = await this.db
           .select({ totalFetches: feedSource.totalFetches, successFetches: feedSource.successFetches, consecutiveFailures: feedSource.consecutiveFailures })
@@ -488,7 +549,6 @@ export class CollectorService {
         }
       }
 
-      // Link alive
       if (!blocked) {
         const alive = await this.checkLinkAlive(checkUrl);
         if (!alive.alive) {
@@ -504,54 +564,16 @@ export class CollectorService {
       }
     }
 
-    // Dedup gate (batch-internal and cross-db URL/title)
-    const aliveArticles = articlesForGate.filter((a) => {
-      const info = gateArticleMap.get(a.id);
-      return info !== undefined;
-    }).map((a) => ({ ...a, artInfo: gateArticleMap.get(a.id)! })).filter((_a) => {
-      return true;
-    });
-
-    // Use existing checkDuplicateGates for URL/title dedup on non-blocked articles
-    const nonBlocked = allNewArticles.filter((a) => {
-      return !allArticleIds.some((id) => id === a.id);
-    });
-    // Actually, run checkDuplicateGates on all new articles (it will skip already-blocked ones)
     const dedupPassed = await this.checkDuplicateGates(allNewArticles);
-    gateDup = allNewArticles.length - dedupPassed.length;
+    const gateDup = allNewArticles.length - dedupPassed.length;
+    const gatePassed = dedupPassed.length;
+    this.logger.log(`[11/12] quality_gate: passed=${gatePassed}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
 
-    const passedGateIds = new Set(dedupPassed.map((a) => a.id));
-    const gateAliveArticles = dedupPassed;
-    gatePassed = gateAliveArticles.length;
-
-    this.logger.log(`Stage 9: passed=${gatePassed}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
-
-    // ── Stage 10: Publish ──
-    const publishedCount = await this.executePublishGate(gateAliveArticles, publishThreshold);
-    this.logger.log(`Stage 10: published=${publishedCount} (threshold=${publishThreshold})`);
-
-    // ── Stage 11: Front Page + Digest ──
+    // ── Stage 12/12: publish (front page + digest + article hotlist) ──
+    const publishedCount = await this.executePublishGate(dedupPassed, publishThreshold);
     await this.selectForFrontPage();
     await this.ensureDigest(today);
-
-    // ── Stage 12: Auto-rescore if quota remains ──
-    const finalAiCount = await this.getAiCallCount(today);
-    if (finalAiCount < aiDailyLimit) {
-      this.logger.log(`Stage 12: ${aiDailyLimit - finalAiCount} AI quota remaining, rescoring`);
-      const rescoreResult = await this.rescorePending();
-      this.logger.log(`Rescore: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
-      const rescoredArticles = await this.db
-        .select({ id: article.id })
-        .from(article)
-        .where(and(ne(article.status, 'published'), ne(article.status, 'blocked'), isNotNull(article.primaryDirection)));
-      if (rescoredArticles.length > 0) {
-        const rescoredPublished = await this.executePublishGate(rescoredArticles, publishThreshold);
-        if (rescoredPublished > 0) {
-          this.logger.log(`Post-rescore publish: ${rescoredPublished}`);
-        }
-      }
-      await this.selectForFrontPage();
-    }
+    this.logger.log(`[12/12] publish: published=${publishedCount} (threshold=${publishThreshold})`);
 
     this.logger.log('Pipeline completed successfully');
   }
@@ -785,9 +807,10 @@ export class CollectorService {
     const rows = candidatesResult as unknown as CandidateRow[];
     const byDirection = new Map<string, CandidateRow[]>();
     for (const c of rows) {
-      const d = normalizeDirection(c.primary_direction) ?? 'model';
-      if (!byDirection.has(d)) byDirection.set(d, []);
-      byDirection.get(d)!.push(c);
+      const d = c.primary_direction as string | null;
+      const dir = d ?? 'model';
+      if (!byDirection.has(dir)) byDirection.set(dir, []);
+      byDirection.get(dir)!.push(c);
     }
 
     const selected: CandidateRow[] = [];
@@ -819,7 +842,7 @@ export class CollectorService {
       if (selected.length >= limit) break;
       if (selected.some((s: CandidateRow) => s.id === c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = normalizeDirection(c.primary_direction) ?? 'model';
+      const dir = c.primary_direction ?? 'model';
       if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
       if ((directionCounts.get(dir) || 0) >= directionCap + 1 && selected.length < limit - 1) continue;
       selected.push(c);
@@ -835,7 +858,7 @@ export class CollectorService {
     for (const c of rows) {
       if (selectedIds.has(c.id)) continue;
       const src = c.source_name || 'unknown';
-      const dir = normalizeDirection(c.primary_direction) ?? 'model';
+      const dir = c.primary_direction ?? 'model';
       let reason: string;
       if ((sourceCounts.get(src) || 0) >= sourceCap) reason = 'source_cap';
       else if ((directionCounts.get(dir) || 0) >= directionCap) reason = 'direction_cap';

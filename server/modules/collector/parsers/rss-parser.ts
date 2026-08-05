@@ -26,6 +26,39 @@ function decodeEntities(text: string): string {
     );
 }
 
+export async function parseRssContent(rawXml: string): Promise<ParseResult> {
+  try {
+    const feed = await rssParser.parseString(rawXml);
+    if (!feed || !feed.items) {
+      return { items: [], error: 'No items in feed' };
+    }
+
+    const items: ParsedItem[] = [];
+    for (const item of feed.items) {
+      const title = (item.title ?? '').trim();
+      const link = (item.link ?? '').trim();
+      if (!title || !link) continue;
+
+      const rawHtml = item.content ?? item.contentSnippet ?? '';
+      const content = decodeEntities(rawHtml.replace(/<[^>]*>/g, '').trim());
+      const pubDate = item.pubDate ? new Date(item.pubDate) : null;
+
+      items.push({
+        title,
+        url: link,
+        publishedAt: pubDate && !isNaN(pubDate.getTime()) ? pubDate : null,
+        content,
+        rawContent: rawHtml,
+      });
+    }
+
+    return { items };
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    return { items: [], error: errMsg };
+  }
+}
+
 export async function parseRssFeed(url: string): Promise<ParseResult> {
   try {
     const feed = await rssParser.parseURL(url);

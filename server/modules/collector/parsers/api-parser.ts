@@ -32,6 +32,43 @@ function extractDateField(item: Record<string, unknown>, keys: string[]): Date |
   return null;
 }
 
+export async function parseApiContent(rawJson: string): Promise<ParseResult> {
+  try {
+    const data = JSON.parse(rawJson);
+    const rawItems = extractItemsArray(data);
+    const items: ParsedItem[] = [];
+
+    for (const raw of rawItems) {
+      if (!raw || typeof raw !== 'object') continue;
+      const obj = raw as Record<string, unknown>;
+
+      const title = extractStringField(obj, ['title', 'name', 'headline']);
+      const link = extractStringField(obj, ['url', 'link', 'href', 'permalink']);
+      if (!title || !link) continue;
+
+      const content = extractStringField(obj, [
+        'content', 'description', 'summary', 'body', 'text', 'excerpt',
+      ]);
+      const publishedAt = extractDateField(obj, [
+        'publishedAt', 'published_at', 'date', 'pubDate', 'created_at', 'createdAt',
+      ]);
+
+      items.push({
+        title,
+        url: link,
+        publishedAt,
+        content: content || title,
+        rawContent: JSON.stringify(obj),
+      });
+    }
+
+    return { items };
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    return { items: [], error: errMsg };
+  }
+}
+
 export async function parseApiFeed(url: string): Promise<ParseResult> {
   try {
     const controller = new AbortController();

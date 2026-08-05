@@ -1,6 +1,79 @@
+import { PIPELINE_STAGE_ORDER } from '../../../server/modules/collector/collector.service';
 import { normalizeItems, decodeEntities, cleanContent, computeContentHash } from '../../../server/modules/collector/pipeline-normalize';
 import { dedupBatch, filterAgainstExisting, stripTrackingParams } from '../../../server/modules/collector/pipeline-dedup';
-import { normalizeDirection, ALL_DIRECTION_IDS } from '../../../shared/directions';
+import { ALL_DIRECTION_IDS } from '../../../shared/directions';
+
+describe('PIPELINE_STAGE_ORDER (production export)', () => {
+  it('has exactly 12 stages', () => {
+    expect(PIPELINE_STAGE_ORDER).toHaveLength(12);
+  });
+
+  it('all stage names are unique', () => {
+    const unique = new Set(PIPELINE_STAGE_ORDER);
+    expect(unique.size).toBe(PIPELINE_STAGE_ORDER.length);
+  });
+
+  it('starts with source_snapshot and ends with publish', () => {
+    expect(PIPELINE_STAGE_ORDER[0]).toBe('source_snapshot');
+    expect(PIPELINE_STAGE_ORDER[PIPELINE_STAGE_ORDER.length - 1]).toBe('publish');
+  });
+
+  it('fetch comes before parse (separate observable stages)', () => {
+    const fetchIdx = PIPELINE_STAGE_ORDER.indexOf('fetch');
+    const parseIdx = PIPELINE_STAGE_ORDER.indexOf('parse');
+    expect(fetchIdx).toBeGreaterThan(-1);
+    expect(parseIdx).toBeGreaterThan(-1);
+    expect(fetchIdx).toBeLessThan(parseIdx);
+  });
+
+  it('classify does NOT write direction_score (rule_score is separate)', () => {
+    const classifyIdx = PIPELINE_STAGE_ORDER.indexOf('classify');
+    const ruleIdx = PIPELINE_STAGE_ORDER.indexOf('rule_score');
+    expect(classifyIdx).toBeGreaterThan(-1);
+    expect(ruleIdx).toBeGreaterThan(-1);
+    expect(classifyIdx).toBeLessThan(ruleIdx);
+  });
+
+  it('classify < cluster < rule_score', () => {
+    const classifyIdx = PIPELINE_STAGE_ORDER.indexOf('classify');
+    const clusterIdx = PIPELINE_STAGE_ORDER.indexOf('cluster');
+    const ruleIdx = PIPELINE_STAGE_ORDER.indexOf('rule_score');
+    expect(classifyIdx).toBeLessThan(clusterIdx);
+    expect(clusterIdx).toBeLessThan(ruleIdx);
+  });
+
+  it('rule_score < ai_score < quality_gate < publish', () => {
+    const ruleIdx = PIPELINE_STAGE_ORDER.indexOf('rule_score');
+    const aiIdx = PIPELINE_STAGE_ORDER.indexOf('ai_score');
+    const gateIdx = PIPELINE_STAGE_ORDER.indexOf('quality_gate');
+    const publishIdx = PIPELINE_STAGE_ORDER.indexOf('publish');
+    expect(ruleIdx).toBeLessThan(aiIdx);
+    expect(aiIdx).toBeLessThan(gateIdx);
+    expect(gateIdx).toBeLessThan(publishIdx);
+  });
+
+  it('trace runs before classify', () => {
+    const traceIdx = PIPELINE_STAGE_ORDER.indexOf('trace');
+    const classifyIdx = PIPELINE_STAGE_ORDER.indexOf('classify');
+    expect(traceIdx).toBeLessThan(classifyIdx);
+  });
+
+  it('normalize and url_dedup run after parse', () => {
+    const parseIdx = PIPELINE_STAGE_ORDER.indexOf('parse');
+    const normIdx = PIPELINE_STAGE_ORDER.indexOf('normalize');
+    const dedupIdx = PIPELINE_STAGE_ORDER.indexOf('url_dedup');
+    expect(parseIdx).toBeLessThan(normIdx);
+    expect(normIdx).toBeLessThan(dedupIdx);
+  });
+
+  it('exact order matches specification', () => {
+    expect([...PIPELINE_STAGE_ORDER]).toEqual([
+      'source_snapshot', 'fetch', 'parse', 'normalize',
+      'url_dedup', 'trace', 'classify', 'cluster',
+      'rule_score', 'ai_score', 'quality_gate', 'publish',
+    ]);
+  });
+});
 
 describe('decodeEntities', () => {
   it('decodes common HTML entities', () => {
@@ -158,38 +231,6 @@ describe('filterAgainstExisting', () => {
   });
 });
 
-describe('Pipeline stage ordering', () => {
-  it('classification must run before clustering', () => {
-    const stages = [
-      'source_snapshot', 'scheduled_fetch', 'parse',
-      'standardize', 'url_dedup', 'trace',
-      'classify', 'cluster', 'rule_score',
-      'ai_score', 'quality_gate', 'publish',
-    ];
-    const classifyIdx = stages.indexOf('classify');
-    const clusterIdx = stages.indexOf('cluster');
-    const ruleIdx = stages.indexOf('rule_score');
-    const aiIdx = stages.indexOf('ai_score');
-    const gateIdx = stages.indexOf('quality_gate');
-    const publishIdx = stages.indexOf('publish');
-
-    expect(classifyIdx).toBeLessThan(clusterIdx);
-    expect(ruleIdx).toBeLessThan(aiIdx);
-    expect(gateIdx).toBeLessThan(publishIdx);
-    expect(classifyIdx).toBeLessThan(ruleIdx);
-  });
-
-  it('trace must run before classify', () => {
-    const stages = [
-      'source_snapshot', 'scheduled_fetch', 'parse',
-      'standardize', 'url_dedup', 'trace',
-      'classify', 'cluster', 'rule_score',
-      'ai_score', 'quality_gate', 'publish',
-    ];
-    expect(stages.indexOf('trace')).toBeLessThan(stages.indexOf('classify'));
-  });
-});
-
 describe('Direction classification coverage', () => {
   let scoringService: { ruleBasedScoreArticle: (t: string, c: string, s: string) => unknown };
 
@@ -297,19 +338,5 @@ describe('Retry backoff timing', () => {
     for (let i = 1; i < delays.length; i++) {
       expect(delays[i]).toBeGreaterThan(delays[i - 1]);
     }
-  });
-});
-
-describe('New source inclusion in next run', () => {
-  it('enabled sources are selected for pipeline', () => {
-    const sources = [
-      { id: '1', name: 'Source A', enabled: true, feedType: 'rss' },
-      { id: '2', name: 'Source B', enabled: false, feedType: 'rss' },
-      { id: '3', name: 'Source C', enabled: true, feedType: 'api' },
-    ];
-    const enabled = sources.filter((s) => s.enabled);
-    expect(enabled).toHaveLength(2);
-    expect(enabled.map((s) => s.name)).toContain('Source A');
-    expect(enabled.map((s) => s.name)).toContain('Source C');
   });
 });

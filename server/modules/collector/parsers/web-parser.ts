@@ -71,6 +71,36 @@ function extractMeta(html: string): ExtractedMeta {
   return meta;
 }
 
+export async function parseWebContent(rawHtml: string, fallbackUrl: string): Promise<ParseResult> {
+  try {
+    const meta = extractMeta(rawHtml);
+    const finalUrl = meta.canonicalUrl || meta.ogUrl || fallbackUrl;
+    const title = meta.title;
+    if (!title) {
+      return { items: [], error: 'No title found in page' };
+    }
+
+    const content = meta.description || meta.bodyText.slice(0, 500) || title;
+    const publishedAt = meta.datePublished
+      ? new Date(meta.datePublished)
+      : null;
+
+    const item: ParsedItem = {
+      title,
+      url: finalUrl,
+      canonicalUrl: meta.canonicalUrl || undefined,
+      publishedAt: publishedAt && !isNaN(publishedAt.getTime()) ? publishedAt : null,
+      content,
+      rawContent: rawHtml.slice(0, 10000),
+    };
+
+    return { items: [item] };
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    return { items: [], error: errMsg };
+  }
+}
+
 export async function parseWebFeed(url: string): Promise<ParseResult> {
   try {
     const controller = new AbortController();
