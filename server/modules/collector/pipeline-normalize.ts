@@ -1,5 +1,26 @@
 import * as crypto from 'crypto';
 
+const TRACKING_PARAMS = new Set([
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term',
+  'utm_content', 'utm_id', 'fbclid', 'gclid', 'mc_cid', 'mc_eid',
+]);
+
+export function normalizeUrlForDedup(url: string): string {
+  if (!url) return url;
+  let cleaned = url.replace(/[.,;:!?)\]}>]+$/, '');
+  try {
+    const parsed = new URL(cleaned);
+    parsed.hash = '';
+    for (const param of TRACKING_PARAMS) {
+      parsed.searchParams.delete(param);
+    }
+    const result = parsed.toString();
+    return result.endsWith('?') ? result.slice(0, -1) : result;
+  } catch {
+    return cleaned;
+  }
+}
+
 export interface ParsedItem {
   title: string;
   url: string;
@@ -72,8 +93,9 @@ export function normalizeItems(
     if (!title) { missingTitle++; continue; }
     if (!url) { missingUrl++; continue; }
 
-    const content = cleanContent(item.rawContent) || title;
-    const contentHash = computeContentHash(title, url);
+    const content = item.content || cleanContent(item.rawContent) || title;
+    const normalizedUrl = normalizeUrlForDedup(url);
+    const contentHash = computeContentHash(title, normalizedUrl);
 
     result.push({
       title,

@@ -432,6 +432,26 @@ export class AiScoringService {
     }
   }
 
+  classifyArticle(
+    title: string,
+    content: string,
+    sourceTier: string,
+  ): { primaryDirection: Direction | null; evidence: string[] } {
+    const text = `${title}\n${content}`;
+    const evidence: string[] = [];
+    const directionScores = {} as Record<Direction, DirectionEvidence>;
+
+    for (const dir of DIRECTIONS) {
+      directionScores[dir.id] = this.scoreDirectionEvidence(dir, text, sourceTier);
+      if (directionScores[dir.id].hasClearEvidence) {
+        evidence.push(dir.id);
+      }
+    }
+
+    const { primaryDirection } = this.identifyPrimary(directionScores);
+    return { primaryDirection, evidence };
+  }
+
   ruleBasedScoreArticle(
     title: string,
     content: string,
