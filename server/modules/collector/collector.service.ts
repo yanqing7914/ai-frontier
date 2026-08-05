@@ -3,7 +3,7 @@ import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
 } from '@lark-apaas/fullstack-nestjs-core';
-import { eq, ne, inArray, and, gte, isNotNull, sql } from 'drizzle-orm';
+import { eq, ne, inArray, and, isNotNull, sql } from 'drizzle-orm';
 import {
   article,
   feedSource,
@@ -22,9 +22,10 @@ import {
   shouldTrace,
   traceFromRssContent,
 } from './trace-engine';
+import { parseFeed } from './parsers';
+import { normalizeItems } from './pipeline-normalize';
+import { dedupBatch, filterAgainstExisting } from './pipeline-dedup';
 import * as crypto from 'crypto';
-import Parser from 'rss-parser';
-
 import {
   ALL_DIRECTION_IDS as DIRECTIONS,
   normalizeDirection,
@@ -34,7 +35,7 @@ import { canPublishArticle } from './publish-gate';
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
 
-interface NewArticleInfo {
+interface PipelineArticle {
   id: string;
   title: string;
   url: string;
@@ -43,32 +44,6 @@ interface NewArticleInfo {
   feedSourceId: string;
   sourceUrl: string;
   sourceTier: string;
-}
-
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&#x2F;/g, '/')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code: string) =>
-      String.fromCharCode(parseInt(code, 10)),
-    )
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, code: string) =>
-      String.fromCharCode(parseInt(code, 16)),
-    );
-}
-
-function computeHash(title: string, url: string): string {
-  return crypto
-    .createHash('md5')
-    .update(title + url)
-    .digest('hex');
 }
 
 function jaccardSimilarity(text1: string, text2: string): number {
@@ -92,12 +67,7 @@ function getWordSet(text: string): Set<string> {
 @Injectable()
 export class CollectorService {
   private readonly logger = new Logger(CollectorService.name);
-
-  private readonly parser = new Parser({
-    timeout: 15000,
-    maxRedirects: 5,
-    headers: { 'User-Agent': 'AI-News-Dashboard/1.0' },
-  });
+  private pipelineRunning = false;
 
   constructor(
     @Inject(DRIZZLE_DATABASE)
@@ -108,132 +78,267 @@ export class CollectorService {
   ) {}
 
   async runPipeline(): Promise<void> {
-    this.logger.log('Pipeline started');
+    if (this.pipelineRunning) {
+      this.logger.log('Pipeline already running, skipping');
+      return;
+    }
+    this.pipelineRunning = true;
+    const startTime = Date.now();
+    try {
+      await this.executeFullPipeline();
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Pipeline failed: ${errMsg}`);
+    } finally {
+      this.pipelineRunning = false;
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      this.logger.log(`Pipeline finished in ${elapsed}s`);
+    }
+  }
 
+  private async executeFullPipeline(): Promise<void> {
+    this.logger.log('Pipeline started');
+    const today = new Date().toISOString().split('T')[0];
+    const concurrency = await this.getConfig('fetch_concurrency', 3);
+    const retryCount = await this.getConfig('fetch_retry_count', 3);
+    const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
+
+    // ── Stage 1: Source Snapshot ──
     const sources = await this.db
       .select()
       .from(feedSource)
       .where(eq(feedSource.enabled, true));
 
     if (sources.length === 0) {
-      this.logger.log('No enabled feed sources, skipping pipeline');
+      this.logger.log('Stage 1: No enabled sources');
+      await this.ensureDigest(today);
       return;
     }
+    this.logger.log(`Stage 1: ${sources.length} enabled sources`);
 
-    const concurrency = await this.getConfig('fetch_concurrency', 3);
-    const retryCount = await this.getConfig('fetch_retry_count', 3);
-    const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
-    const today = new Date().toISOString().split('T')[0];
+    // ── Stage 2: Scheduled Fetch ──
+    const allParsedItems: {
+      items: Array<{ title: string; url: string; canonicalUrl?: string; publishedAt: Date | null; content: string; rawContent: string }>;
+      feedSourceId: string;
+      sourceName: string;
+      sourceTier: string;
+    }[] = [];
+    let fetchOk = 0;
+    let fetchFail = 0;
 
-    this.logger.log(
-      `Processing ${sources.length} sources (concurrency=${concurrency})`,
-    );
-
-    // 1. Fetch & parse
-    const allNewArticles: NewArticleInfo[] = [];
     await this.processBatch(sources, concurrency, async (source) => {
-      const newArticles = await this.fetchAndParse(source, retryCount);
-      allNewArticles.push(...newArticles);
+      let parsed = null;
+      for (let attempt = 1; attempt <= retryCount; attempt++) {
+        try {
+          const result = await parseFeed(source.feedType, source.url);
+          if (result.error) {
+            if (attempt === retryCount) {
+              await this.feedSourceService.updateFetchStats(source.id, false, result.error);
+              return;
+            }
+            await this.sleep(1000 * Math.pow(2, attempt - 1));
+            continue;
+          }
+          parsed = result;
+          break;
+        } catch (error: unknown) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          this.logger.warn(`Fetch attempt ${attempt}/${retryCount} for "${source.name}": ${errMsg}`);
+          if (attempt === retryCount) {
+            await this.feedSourceService.updateFetchStats(source.id, false, errMsg);
+            return;
+          }
+          await this.sleep(1000 * Math.pow(2, attempt - 1));
+        }
+      }
+      if (parsed && parsed.items.length > 0) {
+        await this.feedSourceService.updateFetchStats(source.id, true);
+        fetchOk++;
+        allParsedItems.push({
+          items: parsed.items,
+          feedSourceId: source.id,
+          sourceName: source.name,
+          sourceTier: source.tier,
+        });
+      } else {
+        fetchFail++;
+        if (parsed) {
+          await this.feedSourceService.updateFetchStats(source.id, false, 'No items in feed');
+        }
+      }
     });
+    this.logger.log(`Stage 2: fetch ok=${fetchOk}, fail=${fetchFail}`);
 
-    const totalCollected = allNewArticles.length;
-    this.logger.log(`Collected ${totalCollected} new articles`);
+    // ── Stage 3: Standardize ──
+    let allNormalized: Array<{
+      title: string; url: string; originalUrl: string; canonicalUrl: string | null;
+      contentHash: string; content: string; rawContent: string; publishedAt: Date | null;
+      sourceName: string; sourceTier: string; feedSourceId: string;
+    }> = [];
+    let normalizeDropped = 0;
+    for (const batch of allParsedItems) {
+      const result = normalizeItems(batch.items, {
+        name: batch.sourceName,
+        tier: batch.sourceTier,
+        feedSourceId: batch.feedSourceId,
+      });
+      allNormalized = allNormalized.concat(result.items);
+      normalizeDropped += result.dropped;
+    }
+    this.logger.log(`Stage 3: normalized=${allNormalized.length}, dropped=${normalizeDropped}`);
 
-    if (totalCollected === 0) {
-      this.logger.log('No new articles, checking digest');
+    // ── Stage 4: URL Dedup ──
+    const recentArticles = await this.db
+      .select({ url: article.url, contentHash: article.contentHash })
+      .from(article)
+      .where(sql`${article.collectedAt} > NOW() - INTERVAL '30 days'`);
+
+    const existingHashes = new Set(recentArticles.map((r) => r.contentHash));
+    const existingUrls = new Set(recentArticles.map((r) => {
+      try {
+        const parsed = new URL(r.url);
+        parsed.hash = '';
+        return parsed.toString().replace(/\?$/, '');
+      } catch {
+        return r.url;
+      }
+    }));
+
+    const dedupInput = allNormalized.map((n) => ({
+      url: n.url,
+      contentHash: n.contentHash,
+      title: n.title,
+    }));
+
+    const dbFiltered = filterAgainstExisting(dedupInput, existingHashes, existingUrls);
+    const batchDedup = dedupBatch(dbFiltered.passed);
+    const totalDeduped = dbFiltered.deduped + batchDedup.deduped;
+
+    const newItemsMap = new Map(batchDedup.passed.map((p) => [p.contentHash, allNormalized.find((n) => n.contentHash === p.contentHash)!]));
+    const newItems = batchDedup.passed.map((p) => newItemsMap.get(p.contentHash)!).filter(Boolean);
+
+    this.logger.log(`Stage 4: passed=${newItems.length}, deduped=${totalDeduped}`);
+
+    if (newItems.length === 0) {
+      this.logger.log('No new articles after dedup');
       await this.ensureDigest(today);
       return;
     }
 
-    // 2. Dedup quality gates
-    const dedupPassed = await this.checkDuplicateGates(allNewArticles);
-    this.logger.log(
-      `${dedupPassed.length}/${totalCollected} passed dedup gates`,
-    );
+    const allNewArticles: PipelineArticle[] = [];
+    for (const item of newItems) {
+      const [inserted] = await this.db
+        .insert(article)
+        .values({
+          title: item.title,
+          url: item.url,
+          contentHash: item.contentHash,
+          sourceName: item.sourceName,
+          feedSourceId: item.feedSourceId,
+          publishedAt: item.publishedAt,
+          status: 'draft',
+        })
+        .returning({ id: article.id });
 
-    // 3. Source reliability
-    const reliabilityPassed: NewArticleInfo[] = [];
-    for (const art of dedupPassed) {
-      const passed = await this.checkSourceReliabilityGate(art);
-      if (passed) reliabilityPassed.push(art);
+      allNewArticles.push({
+        id: inserted.id,
+        title: item.title,
+        url: item.url,
+        content: item.content,
+        rawContent: item.rawContent,
+        feedSourceId: item.feedSourceId,
+        sourceUrl: item.feedSourceId,
+        sourceTier: item.sourceTier,
+      });
     }
-    this.logger.log(
-      `${reliabilityPassed.length} passed source reliability`,
-    );
+    this.logger.log(`Inserted ${allNewArticles.length} new articles`);
 
-    // 4. Content stale
-    const stalePassed: NewArticleInfo[] = [];
-    for (const art of reliabilityPassed) {
-      const passed = await this.checkContentStale(art);
-      if (passed) stalePassed.push(art);
-    }
-    this.logger.log(`${stalePassed.length} passed content stale`);
-
-    // 5. Tracing
-    const articlesForScoring: NewArticleInfo[] = [];
+    // ── Stage 5: Origin Tracing ──
     let traceNeeded = 0;
-    let traceSuccess = 0;
-    let traceFailed = 0;
+    let traceOk = 0;
+    let traceFail = 0;
+    const traceFailIds = new Set<string>();
 
-    for (const art of stalePassed) {
+    for (const art of allNewArticles) {
       const needsTrace = shouldTrace(art.sourceTier, art.url);
-      if (needsTrace) {
-        traceNeeded++;
-        const traced = await this.traceOrigin(art);
-        if (!traced) {
-          traceFailed++;
-          await this.createReviewItem(art.id);
-          await this.db
-            .update(article)
-            .set({ status: 'pending_review' })
-            .where(eq(article.id, art.id));
-          continue;
-        }
-        traceSuccess++;
-      }
-      articlesForScoring.push(art);
-    }
-
-    this.logger.log(
-      `Tracing: needed=${traceNeeded}, success=${traceSuccess}, failed=${traceFailed}`,
-    );
-
-    // 6. Link dead check (parallelized, concurrency=10)
-    const linkAlive: NewArticleInfo[] = [];
-    await this.processBatch(articlesForScoring, 10, async (art) => {
-      const finalUrl = await this.getFinalUrl(art.id);
-      const alive = await this.checkLinkAlive(finalUrl);
-      if (!alive.alive) {
-        await this.db.insert(qualityGate).values({
-          articleId: art.id,
-          reason: 'link_dead',
-          detail: alive.detail,
-        });
-        await this.db
-          .update(article)
-          .set({ status: 'blocked' })
-          .where(eq(article.id, art.id));
+      if (!needsTrace) continue;
+      traceNeeded++;
+      const traced = await this.traceOrigin(art);
+      if (traced) {
+        traceOk++;
       } else {
-        linkAlive.push(art);
+        traceFail++;
+        traceFailIds.add(art.id);
       }
-    });
-    this.logger.log(
-      `${linkAlive.length} passed link alive check`,
-    );
+    }
+    this.logger.log(`Stage 5: needed=${traceNeeded}, ok=${traceOk}, fail=${traceFail}`);
 
-    // 7. Cluster
-    await this.clusterArticles(linkAlive);
+    // ── Stage 6: Content Classification (rule-based, before clustering) ──
+    let classOk = 0;
+    let classDegraded = 0;
+    const classifiedArticles: PipelineArticle[] = [];
 
-    // 8. AI scoring (with per-source quota and tier-priority sorting)
+    for (const art of allNewArticles) {
+      try {
+        const source = sources.find((s) => s.id === art.feedSourceId);
+        const tier = source?.tier ?? 'signal';
+        const ruleResult = this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier);
+
+        await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
+        for (const dir of DIRECTIONS) {
+          const ev = ruleResult.directionScores[dir];
+          await this.db.insert(directionScore).values({
+            articleId: art.id,
+            direction: dir,
+            dimensionScores: ev?.dimensionScores ?? {},
+            totalScore: ev?.normalizedScore ?? 0,
+          });
+        }
+
+        const setStatus = traceFailIds.has(art.id) ? 'pending_review' : undefined;
+        const articleStatus = (!ruleResult.primaryDirection && !setStatus) ? 'draft'
+          : setStatus ?? undefined;
+
+        await this.db.update(article).set({
+          primaryDirection: ruleResult.primaryDirection,
+          primaryScore: ruleResult.publishScore,
+          summary: ruleResult.summary,
+          aiProcessed: false,
+          aiDegradeReason: ruleResult.degradeReason,
+          ...(articleStatus ? { status: articleStatus } : {}),
+        }).where(eq(article.id, art.id));
+
+        if (traceFailIds.has(art.id)) {
+          await this.createReviewItem(art.id);
+        }
+
+        classOk++;
+        classifiedArticles.push(art);
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Classification failed for "${art.title}": ${errMsg}`);
+        classDegraded++;
+        if (traceFailIds.has(art.id)) {
+          await this.db.update(article).set({ status: 'pending_review' }).where(eq(article.id, art.id));
+          await this.createReviewItem(art.id);
+        }
+        classifiedArticles.push(art);
+      }
+    }
+    this.logger.log(`Stage 6: classified=${classOk}, degraded=${classDegraded}`);
+
+    // ── Stage 7: Event Clustering ──
+    await this.clusterArticles(classifiedArticles);
+    this.logger.log(`Stage 7: clustering completed for ${classifiedArticles.length} articles`);
+
+    // ── Stage 8: AI Scoring (enhance rule results) ──
     const aiPerSourceLimit = await this.getConfig('ai_per_source_limit', 30);
     let aiCount = await this.getAiCallCount(today);
 
     const tierMap = new Map<string, string>();
-    for (const s of sources) {
-      tierMap.set(s.id, s.tier);
-    }
     const sourceNameMap = new Map<string, string>();
     for (const s of sources) {
+      tierMap.set(s.id, s.tier);
       sourceNameMap.set(s.id, s.name);
     }
 
@@ -241,38 +346,23 @@ export class CollectorService {
     const todayAiArticles = await this.db
       .select({ sourceName: article.sourceName })
       .from(article)
-      .where(
-        and(
-          eq(article.aiProcessed, true),
-          sql`${article.collectedAt}::date = ${today}::date`,
-        ),
-      );
+      .where(and(eq(article.aiProcessed, true), sql`${article.collectedAt}::date = ${today}::date`));
     for (const row of todayAiArticles) {
-      perSourceCount.set(
-        row.sourceName,
-        (perSourceCount.get(row.sourceName) || 0) + 1,
-      );
+      perSourceCount.set(row.sourceName, (perSourceCount.get(row.sourceName) || 0) + 1);
     }
 
-    const TIER_PRIORITY: Record<string, number> = {
-      authoritative: 0,
-      validation: 1,
-      signal: 2,
-    };
-    const sortedForScoring = [...linkAlive].sort((a, b) => {
-      const tierA = tierMap.get(a.feedSourceId) ?? 'signal';
-      const tierB = tierMap.get(b.feedSourceId) ?? 'signal';
-      const pA = TIER_PRIORITY[tierA] ?? 2;
-      const pB = TIER_PRIORITY[tierB] ?? 2;
+    const TIER_PRIORITY: Record<string, number> = { authoritative: 0, validation: 1, signal: 2 };
+    const sortedForScoring = [...classifiedArticles].sort((a, b) => {
+      const pA = TIER_PRIORITY[tierMap.get(a.feedSourceId) ?? 'signal'] ?? 2;
+      const pB = TIER_PRIORITY[tierMap.get(b.feedSourceId) ?? 'signal'] ?? 2;
       if (pA !== pB) return pA - pB;
-      const nameA = sourceNameMap.get(a.feedSourceId) ?? '';
-      const nameB = sourceNameMap.get(b.feedSourceId) ?? '';
-      const cntA = perSourceCount.get(nameA) || 0;
-      const cntB = perSourceCount.get(nameB) || 0;
+      const cntA = perSourceCount.get(sourceNameMap.get(a.feedSourceId) ?? '') || 0;
+      const cntB = perSourceCount.get(sourceNameMap.get(b.feedSourceId) ?? '') || 0;
       return cntA - cntB;
     });
 
-    let degradedCount = 0;
+    let aiUsed = 0;
+    let aiDegraded = 0;
     for (const art of sortedForScoring) {
       const source = sources.find((s) => s.id === art.feedSourceId);
       const tier = source?.tier ?? 'signal';
@@ -280,59 +370,24 @@ export class CollectorService {
       const srcUsed = perSourceCount.get(srcName) || 0;
 
       let result;
-      let aiUsed = false;
+      let usedAi = false;
 
       if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit) {
         try {
-          result = await this.aiScoringService.scoreArticle(
-            art.title,
-            art.content,
-            tier,
-          );
-          if (result.aiProcessed) {
-            aiUsed = true;
-          }
+          result = await this.aiScoringService.scoreArticle(art.title, art.content, tier);
+          if (result.aiProcessed) { usedAi = true; }
         } catch (outerError: unknown) {
-          const errType = outerError instanceof Error
-            ? outerError.constructor.name : typeof outerError;
-          const errMsg = outerError instanceof Error
-            ? outerError.message : String(outerError);
-          const degradeReason = `[${errType}] ${errMsg}`;
-          this.logger.error(
-            `Outer AI scoring catch failed for "${art.title}": ${degradeReason}`,
-          );
-          result = {
-            ...this.aiScoringService.ruleBasedScoreArticle(
-              art.title,
-              art.content,
-              tier,
-              degradeReason,
-            ),
-          };
+          const errType = outerError instanceof Error ? outerError.constructor.name : typeof outerError;
+          const errMsg = outerError instanceof Error ? outerError.message : String(outerError);
+          result = { ...this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier, `[${errType}] ${errMsg}`) };
         }
       } else {
-        if (aiCount >= aiDailyLimit) {
-          result = {
-            ...this.aiScoringService.ruleBasedScoreArticle(
-              art.title,
-              art.content,
-              tier,
-              'ai_daily_limit_reached',
-            ),
-          };
-        } else {
-          result = {
-            ...this.aiScoringService.ruleBasedScoreArticle(
-              art.title,
-              art.content,
-              tier,
-              `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`,
-            ),
-          };
-        }
-        degradedCount++;
+        const reason = aiCount >= aiDailyLimit ? 'ai_daily_limit_reached' : `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`;
+        result = { ...this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier, reason) };
+        aiDegraded++;
       }
 
+      await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
       for (const dir of DIRECTIONS) {
         const ev = result.directionScores[dir];
         await this.db.insert(directionScore).values({
@@ -343,40 +398,29 @@ export class CollectorService {
         });
       }
 
-      const articleStatus = (!result.primaryDirection || !result.aiProcessed)
-        ? 'draft' : undefined;
+      const articleStatus = (!result.primaryDirection || !result.aiProcessed) ? 'draft' : undefined;
+      await this.db.update(article).set({
+        primaryDirection: result.primaryDirection,
+        primaryScore: result.publishScore,
+        summary: result.summary,
+        aiProcessed: result.aiProcessed,
+        aiDegradeReason: result.degradeReason,
+        ...(articleStatus ? { status: articleStatus } : {}),
+      }).where(eq(article.id, art.id));
 
-      await this.db
-        .update(article)
-        .set({
-          primaryDirection: result.primaryDirection,
-          primaryScore: result.publishScore,
-          summary: result.summary,
-          aiProcessed: result.aiProcessed,
-          aiDegradeReason: result.degradeReason,
-          ...(articleStatus ? { status: articleStatus } : {}),
-        })
-        .where(eq(article.id, art.id));
-
-      if (aiUsed) {
-        aiCount++;
+      if (usedAi) {
+        aiUsed++;
         perSourceCount.set(srcName, (perSourceCount.get(srcName) || 0) + 1);
         await this.incrementAiCount(today);
       }
     }
+    this.logger.log(`Stage 8: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
 
-    this.logger.log(
-      `AI scoring: ${aiCount}/${aiDailyLimit} used today, ` +
-      `${aiPerSourceLimit} max per source, ` +
-      `${degradedCount} degraded to rule-based`,
-    );
-
-    // 8.5 Auto-approve stuck pending_review articles
+    // Auto-approve stuck pending_review
     const autoApproveThreshold = await this.getConfig('auto_approve_threshold', 60);
     const autoApproveHours = await this.getConfig('auto_approve_hours', 24);
     const autoApproved = await this.db.execute(sql`
-      UPDATE article
-      SET status = 'draft'
+      UPDATE article SET status = 'draft'
       WHERE status = 'pending_review'
         AND collected_at < NOW() - (${autoApproveHours} || ' hours')::interval
         AND primary_direction IS NOT NULL
@@ -385,55 +429,125 @@ export class CollectorService {
     `);
     const autoApprovedCount = (autoApproved as unknown as { id: string }[]).length;
     if (autoApprovedCount > 0) {
-      this.logger.log(
-        `Auto-approved ${autoApprovedCount} stuck pending_review articles ` +
-        `(threshold=${autoApproveThreshold}, hours=${autoApproveHours})`,
-      );
+      this.logger.log(`Auto-approved ${autoApprovedCount} stuck pending_review articles`);
     }
 
-    // 9. Publish decision (unified gate)
+    // ── Stage 9: Unified Quality Gate ──
     const publishThreshold = await this.getConfig('publish_threshold', 75);
-    const publishedCount = await this.executePublishGate(linkAlive, publishThreshold);
+    const minSuccessRate = await this.getConfig('source_min_success_rate', 30);
+    const maxConsecFail = await this.getConfig('source_max_consecutive_failures', 5);
 
-    this.logger.log(
-      `Publish: ${publishedCount} articles published (threshold=${publishThreshold})`,
-    );
+    let gateStale = 0;
+    let gateUnreliable = 0;
+    let gateDead = 0;
+    let gateDup = 0;
+    let gatePassed = 0;
 
-    // 10. Front page diversity selection
+    const allArticleIds = allNewArticles.map((a) => a.id);
+    const articlesForGate = await this.db
+      .select({ id: article.id, title: article.title, url: article.url, status: article.status, publishedAt: article.publishedAt, feedSourceId: article.feedSourceId })
+      .from(article)
+      .where(inArray(article.id, allArticleIds));
+
+    const gateArticleMap = new Map(allNewArticles.map((a) => [a.id, a]));
+
+    for (const artRow of articlesForGate) {
+      const artInfo = gateArticleMap.get(artRow.id);
+      if (!artInfo) continue;
+
+      const checkUrl = await this.getFinalUrl(artRow.id);
+      let blocked = false;
+      let blockReason = '';
+      let blockDetail = '';
+
+      // Stale
+      if (artRow.publishedAt) {
+        const pubTime = artRow.publishedAt instanceof Date ? artRow.publishedAt.getTime() : new Date(artRow.publishedAt).getTime();
+        if (pubTime < Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000) {
+          blocked = true;
+          blockReason = 'content_stale';
+          blockDetail = `Published > ${STALE_DAYS} days ago`;
+          gateStale++;
+        }
+      }
+
+      // Source reliability
+      if (!blocked) {
+        const [src] = await this.db
+          .select({ totalFetches: feedSource.totalFetches, successFetches: feedSource.successFetches, consecutiveFailures: feedSource.consecutiveFailures })
+          .from(feedSource)
+          .where(eq(feedSource.id, artRow.feedSourceId));
+        if (src && src.totalFetches >= 3) {
+          const rate = Math.round((src.successFetches / src.totalFetches) * 100);
+          if (rate < minSuccessRate || src.consecutiveFailures >= maxConsecFail) {
+            blocked = true;
+            blockReason = 'source_unreliable';
+            blockDetail = `Rate ${rate}%, consec fail ${src.consecutiveFailures}`;
+            gateUnreliable++;
+          }
+        }
+      }
+
+      // Link alive
+      if (!blocked) {
+        const alive = await this.checkLinkAlive(checkUrl);
+        if (!alive.alive) {
+          blocked = true;
+          blockReason = 'link_dead';
+          blockDetail = alive.detail;
+          gateDead++;
+        }
+      }
+
+      if (blocked) {
+        await this.blockArticle(artRow.id, blockReason, blockDetail);
+      }
+    }
+
+    // Dedup gate (batch-internal and cross-db URL/title)
+    const aliveArticles = articlesForGate.filter((a) => {
+      const info = gateArticleMap.get(a.id);
+      return info !== undefined;
+    }).map((a) => ({ ...a, artInfo: gateArticleMap.get(a.id)! })).filter((_a) => {
+      return true;
+    });
+
+    // Use existing checkDuplicateGates for URL/title dedup on non-blocked articles
+    const nonBlocked = allNewArticles.filter((a) => {
+      return !allArticleIds.some((id) => id === a.id);
+    });
+    // Actually, run checkDuplicateGates on all new articles (it will skip already-blocked ones)
+    const dedupPassed = await this.checkDuplicateGates(allNewArticles);
+    gateDup = allNewArticles.length - dedupPassed.length;
+
+    const passedGateIds = new Set(dedupPassed.map((a) => a.id));
+    const gateAliveArticles = dedupPassed;
+    gatePassed = gateAliveArticles.length;
+
+    this.logger.log(`Stage 9: passed=${gatePassed}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
+
+    // ── Stage 10: Publish ──
+    const publishedCount = await this.executePublishGate(gateAliveArticles, publishThreshold);
+    this.logger.log(`Stage 10: published=${publishedCount} (threshold=${publishThreshold})`);
+
+    // ── Stage 11: Front Page + Digest ──
     await this.selectForFrontPage();
-
-    // 11. Daily digest
     await this.ensureDigest(today);
 
-    // 12. Auto-rescore pending articles if quota remains
+    // ── Stage 12: Auto-rescore if quota remains ──
     const finalAiCount = await this.getAiCallCount(today);
     if (finalAiCount < aiDailyLimit) {
-      this.logger.log(
-        `Auto-rescore: ${aiDailyLimit - finalAiCount} AI quota remaining, rescoring pending articles`,
-      );
+      this.logger.log(`Stage 12: ${aiDailyLimit - finalAiCount} AI quota remaining, rescoring`);
       const rescoreResult = await this.rescorePending();
-      this.logger.log(
-        `Auto-rescore: ${rescoreResult.succeeded} succeeded, ${rescoreResult.failed} failed`,
-      );
+      this.logger.log(`Rescore: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
       const rescoredArticles = await this.db
         .select({ id: article.id })
         .from(article)
-        .where(
-          and(
-            ne(article.status, 'published'),
-            ne(article.status, 'blocked'),
-            isNotNull(article.primaryDirection),
-          ),
-        );
+        .where(and(ne(article.status, 'published'), ne(article.status, 'blocked'), isNotNull(article.primaryDirection)));
       if (rescoredArticles.length > 0) {
-        const rescoredPublished = await this.executePublishGate(
-          rescoredArticles,
-          publishThreshold,
-        );
+        const rescoredPublished = await this.executePublishGate(rescoredArticles, publishThreshold);
         if (rescoredPublished > 0) {
-          this.logger.log(
-            `Post-rescore publish: ${rescoredPublished} articles published`,
-          );
+          this.logger.log(`Post-rescore publish: ${rescoredPublished}`);
         }
       }
       await this.selectForFrontPage();
@@ -442,195 +556,62 @@ export class CollectorService {
     this.logger.log('Pipeline completed successfully');
   }
 
-  // ─── Fetch & Parse ────────────────────────────────────────
-
-  private async fetchAndParse(
-    source: typeof feedSource.$inferSelect,
-    retryCount: number,
-  ): Promise<NewArticleInfo[]> {
-    let feed: Parser.Output<Record<string, unknown>> | null = null;
-
-    for (let attempt = 1; attempt <= retryCount; attempt++) {
-      try {
-        feed = await this.parser.parseURL(source.url);
-        break;
-      } catch (error: unknown) {
-        const errMsg =
-          error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `Fetch attempt ${attempt}/${retryCount} failed for ` +
-            `"${source.name}": ${errMsg}`,
-        );
-        if (attempt === retryCount) {
-          await this.feedSourceService.updateFetchStats(
-            source.id,
-            false,
-            errMsg,
-          );
-          return [];
-        }
-      }
-    }
-
-    if (!feed || !feed.items) {
-      await this.feedSourceService.updateFetchStats(
-        source.id,
-        false,
-        'No items in feed',
-      );
-      return [];
-    }
-
-    await this.feedSourceService.updateFetchStats(source.id, true);
-
-    const newArticles: NewArticleInfo[] = [];
-    const seenHashes = new Set<string>();
-
-    for (const item of feed.items) {
-      const title = (item.title ?? '').trim();
-      const url = (item.link ?? '').trim();
-
-      if (!title || !url) continue;
-
-      const pubDate = item.pubDate ? new Date(item.pubDate) : null;
-      const rawHtml = item.content ?? item.contentSnippet ?? '';
-      const content = decodeEntities(
-        rawHtml.replace(/<[^>]*>/g, '').trim(),
-      );
-
-      const contentHash = computeHash(title, url);
-
-      const [existing] = await this.db
-        .select({ id: article.id })
-        .from(article)
-        .where(eq(article.contentHash, contentHash));
-
-      if (existing) continue;
-      if (seenHashes.has(contentHash)) continue;
-      seenHashes.add(contentHash);
-
-      const [inserted] = await this.db
-        .insert(article)
-        .values({
-          title,
-          url,
-          contentHash,
-          sourceName: source.name,
-          feedSourceId: source.id,
-          publishedAt:
-            pubDate && !isNaN(pubDate.getTime()) ? pubDate : null,
-          status: 'draft',
-        })
-        .returning({ id: article.id });
-
-      newArticles.push({
-        id: inserted.id,
-        title,
-        url,
-        content,
-        rawContent: rawHtml,
-        feedSourceId: source.id,
-        sourceUrl: source.url,
-        sourceTier: source.tier,
-      });
-    }
-
-    this.logger.log(
-      `Source "${source.name}": ${newArticles.length} new articles`,
-    );
-    return newArticles;
-  }
-
   // ─── Origin Tracing ───────────────────────────────────────
 
-  private async traceOrigin(art: NewArticleInfo): Promise<boolean> {
+  private async traceOrigin(art: PipelineArticle): Promise<boolean> {
     try {
-      const origin = traceFromRssContent(
-        art.url,
-        art.rawContent,
-        art.sourceUrl,
-      );
-
+      const origin = traceFromRssContent(art.url, art.rawContent, art.sourceUrl);
       if (origin) {
-        await this.db
-          .update(article)
-          .set({ originalUrl: origin })
-          .where(eq(article.id, art.id));
-        this.logger.log(
-          `Traced "${art.title}" → ${origin}`,
-        );
+        await this.db.update(article).set({ originalUrl: origin }).where(eq(article.id, art.id));
+        this.logger.log(`Traced "${art.title}" -> ${origin}`);
         return true;
       }
-
-      this.logger.warn(
-        `No origin found for "${art.title}"`,
-      );
+      this.logger.warn(`No origin found for "${art.title}"`);
       return false;
     } catch (error: unknown) {
-      const errMsg =
-        error instanceof Error ? error.message : String(error);
-      this.logger.warn(
-        `Origin tracing error for "${art.title}": ${errMsg}`,
-      );
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Origin tracing error for "${art.title}": ${errMsg}`);
       return false;
     }
   }
 
   private async createReviewItem(articleId: string): Promise<void> {
-    await this.db.insert(reviewItem).values({
-      articleId,
-      status: 'pending',
-    });
+    await this.db.insert(reviewItem).values({ articleId, status: 'pending' });
   }
 
-  // ─── Quality Gates ───────────────────────────────────────
+  // ─── Duplicate Gates ──────────────────────────────────────
 
-  private async checkDuplicateGates(
-    articles: NewArticleInfo[],
-  ): Promise<NewArticleInfo[]> {
+  private async checkDuplicateGates(articles: PipelineArticle[]): Promise<PipelineArticle[]> {
     if (articles.length === 0) return [];
-
     const blockedIds = new Set<string>();
 
     const recentArticles = await this.db
-      .select({
-        id: article.id,
-        title: article.title,
-        url: article.url,
-      })
+      .select({ id: article.id, title: article.title, url: article.url })
       .from(article)
-      .where(
-        sql`${article.collectedAt} > NOW() - INTERVAL '30 days'`,
-      );
+      .where(sql`${article.collectedAt} > NOW() - INTERVAL '30 days'`);
 
     const dbUrlMap = new Map<string, string>();
     const dbTitleMap = new Map<string, string>();
-
     for (const recent of recentArticles) {
-      const normUrl = normalizeUrl(recent.url);
-      const normTitle = normalizeTitle(recent.title);
-      if (!dbUrlMap.has(normUrl)) dbUrlMap.set(normUrl, recent.id);
-      if (!dbTitleMap.has(normTitle)) dbTitleMap.set(normTitle, recent.id);
+      const nUrl = normalizeUrl(recent.url);
+      const nTitle = normalizeTitle(recent.title);
+      if (!dbUrlMap.has(nUrl)) dbUrlMap.set(nUrl, recent.id);
+      if (!dbTitleMap.has(nTitle)) dbTitleMap.set(nTitle, recent.id);
     }
 
     for (const art of articles) {
       if (blockedIds.has(art.id)) continue;
-
-      const normUrl = normalizeUrl(art.url);
-      const normTitle = normalizeTitle(art.title);
-
-      const dupUrlId = dbUrlMap.get(normUrl);
+      const nUrl = normalizeUrl(art.url);
+      const nTitle = normalizeTitle(art.title);
+      const dupUrlId = dbUrlMap.get(nUrl);
       if (dupUrlId && dupUrlId !== art.id) {
-        await this.blockArticle(art.id, 'same_url',
-          `URL 与文章 ${dupUrlId} 重复（规范化后相同）`);
+        await this.blockArticle(art.id, 'same_url', `URL matches article ${dupUrlId}`);
         blockedIds.add(art.id);
         continue;
       }
-
-      const dupTitleId = dbTitleMap.get(normTitle);
+      const dupTitleId = dbTitleMap.get(nTitle);
       if (dupTitleId && dupTitleId !== art.id) {
-        await this.blockArticle(art.id, 'same_title',
-          `标题与文章 ${dupTitleId} 重复`);
+        await this.blockArticle(art.id, 'same_title', `Title matches article ${dupTitleId}`);
         blockedIds.add(art.id);
         continue;
       }
@@ -638,99 +619,27 @@ export class CollectorService {
 
     const batchUrlMap = new Map<string, string>();
     const batchTitleMap = new Map<string, string>();
-
     for (const art of articles) {
       if (blockedIds.has(art.id)) continue;
-
-      const normUrl = normalizeUrl(art.url);
-      const normTitle = normalizeTitle(art.title);
-
-      const existingUrlId = batchUrlMap.get(normUrl);
-      if (existingUrlId) {
-        await this.blockArticle(art.id, 'same_batch_url',
-          `本批次内 URL 与文章 ${existingUrlId} 重复`);
+      const nUrl = normalizeUrl(art.url);
+      const nTitle = normalizeTitle(art.title);
+      const existUrl = batchUrlMap.get(nUrl);
+      if (existUrl) {
+        await this.blockArticle(art.id, 'same_batch_url', `Batch URL matches ${existUrl}`);
         blockedIds.add(art.id);
         continue;
       }
-      batchUrlMap.set(normUrl, art.id);
-
-      const existingTitleId = batchTitleMap.get(normTitle);
-      if (existingTitleId) {
-        await this.blockArticle(art.id, 'same_batch_title',
-          `本批次内标题与文章 ${existingTitleId} 重复`);
+      batchUrlMap.set(nUrl, art.id);
+      const existTitle = batchTitleMap.get(nTitle);
+      if (existTitle) {
+        await this.blockArticle(art.id, 'same_batch_title', `Batch title matches ${existTitle}`);
         blockedIds.add(art.id);
         continue;
       }
-      batchTitleMap.set(normTitle, art.id);
+      batchTitleMap.set(nTitle, art.id);
     }
 
     return articles.filter((a) => !blockedIds.has(a.id));
-  }
-
-  private async checkSourceReliabilityGate(
-    art: NewArticleInfo,
-  ): Promise<boolean> {
-    const minSuccessRate = await this.getConfig(
-      'source_min_success_rate', 30,
-    );
-    const maxConsecutiveFailures = await this.getConfig(
-      'source_max_consecutive_failures', 5,
-    );
-
-    const [source] = await this.db
-      .select({
-        totalFetches: feedSource.totalFetches,
-        successFetches: feedSource.successFetches,
-        consecutiveFailures: feedSource.consecutiveFailures,
-      })
-      .from(feedSource)
-      .where(eq(feedSource.id, art.feedSourceId));
-
-    if (!source) return true;
-    if (source.totalFetches < 3) return true;
-
-    const successRate = Math.round(
-      (source.successFetches / source.totalFetches) * 100,
-    );
-
-    if (
-      successRate < minSuccessRate ||
-      source.consecutiveFailures >= maxConsecutiveFailures
-    ) {
-      await this.blockArticle(art.id, 'source_unreliable',
-        `源成功率 ${successRate}%（阈值 ${minSuccessRate}%），` +
-        `连续失败 ${source.consecutiveFailures} 次（阈值 ${maxConsecutiveFailures}）`);
-      return false;
-    }
-
-    return true;
-  }
-
-  private async checkContentStale(
-    art: NewArticleInfo,
-  ): Promise<boolean> {
-    const [artRow] = await this.db
-      .select({ publishedAt: article.publishedAt })
-      .from(article)
-      .where(eq(article.id, art.id));
-
-    if (artRow?.publishedAt) {
-      const pubTime =
-        artRow.publishedAt instanceof Date
-          ? artRow.publishedAt.getTime()
-          : new Date(artRow.publishedAt).getTime();
-      const staleThreshold =
-        Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000;
-
-      if (pubTime < staleThreshold) {
-        await this.blockArticle(art.id, 'content_stale',
-          `发布时间 ${artRow.publishedAt instanceof Date ? artRow.publishedAt.toISOString() : String(artRow.publishedAt)}，` +
-          `超过 ${STALE_DAYS} 天`);
-        return false;
-      }
-    }
-
-    return true;
   }
 
   private async getFinalUrl(articleId: string): Promise<string> {
@@ -738,30 +647,20 @@ export class CollectorService {
       .select({ url: article.url, originalUrl: article.originalUrl })
       .from(article)
       .where(eq(article.id, articleId));
-
     if (!row) return '';
     return row.originalUrl || row.url;
   }
 
-  private async checkLinkAlive(
-    url: string,
-  ): Promise<{ alive: boolean; detail: string }> {
+  private async checkLinkAlive(url: string): Promise<{ alive: boolean; detail: string }> {
     if (!url) return { alive: true, detail: '' };
-
     const UA = 'Mozilla/5.0 (compatible; AI-News-Bot/1.0)';
-
     let status: number | null = null;
     let errorDetail = '';
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(url, {
-        method: 'HEAD',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: { 'User-Agent': UA },
-      });
+      const response = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal, headers: { 'User-Agent': UA } });
       clearTimeout(timer);
       status = response.status;
     } catch (error: unknown) {
@@ -772,12 +671,7 @@ export class CollectorService {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(url, {
-          method: 'GET',
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: { 'User-Agent': UA, Range: 'bytes=0-0' },
-        });
+        const response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal, headers: { 'User-Agent': UA, Range: 'bytes=0-0' } });
         clearTimeout(timer);
         status = response.status;
         errorDetail = '';
@@ -789,116 +683,67 @@ export class CollectorService {
     if (status !== null && (status === 404 || status === 410)) {
       return { alive: false, detail: `HTTP ${status} for ${url}` };
     }
-
     if (status !== null && status >= 400) {
       return { alive: true, detail: `probe_status: ${status}` };
     }
-
     return { alive: true, detail: '' };
   }
 
-  private async blockArticle(
-    articleId: string,
-    reason: string,
-    detail: string,
-  ): Promise<void> {
-    await this.db.insert(qualityGate).values({
-      articleId,
-      reason,
-      detail,
-    });
-    await this.db
-      .update(article)
-      .set({ status: 'blocked' })
-      .where(eq(article.id, articleId));
+  private async blockArticle(articleId: string, reason: string, detail: string): Promise<void> {
+    await this.db.insert(qualityGate).values({ articleId, reason, detail });
+    await this.db.update(article).set({ status: 'blocked' }).where(eq(article.id, articleId));
   }
 
   // ─── Event Clustering ─────────────────────────────────────
 
-  private async clusterArticles(
-    articles: NewArticleInfo[],
-  ): Promise<void> {
+  private async clusterArticles(articles: PipelineArticle[]): Promise<void> {
     if (articles.length < 2) return;
 
     const parent: Record<string, string> = {};
-    for (const art of articles) {
-      parent[art.id] = art.id;
-    }
+    for (const art of articles) parent[art.id] = art.id;
 
     const find = (id: string): string => {
-      if (parent[id] !== id) {
-        parent[id] = find(parent[id]);
-      }
+      if (parent[id] !== id) parent[id] = find(parent[id]);
       return parent[id];
     };
-
     const union = (id1: string, id2: string): void => {
       const root1 = find(id1);
       const root2 = find(id2);
-      if (root1 !== root2) {
-        parent[root1] = root2;
-      }
+      if (root1 !== root2) parent[root1] = root2;
     };
 
     for (let i = 0; i < articles.length; i++) {
       for (let j = i + 1; j < articles.length; j++) {
-        const sim = jaccardSimilarity(
-          articles[i].title,
-          articles[j].title,
-        );
-        if (sim >= CLUSTER_THRESHOLD) {
+        if (jaccardSimilarity(articles[i].title, articles[j].title) >= CLUSTER_THRESHOLD) {
           union(articles[i].id, articles[j].id);
         }
       }
     }
 
-    const groups = new Map<string, NewArticleInfo[]>();
+    const groups = new Map<string, PipelineArticle[]>();
     for (const art of articles) {
       const root = find(art.id);
-      if (!groups.has(root)) {
-        groups.set(root, []);
-      }
+      if (!groups.has(root)) groups.set(root, []);
       groups.get(root)!.push(art);
     }
 
     for (const [, groupArticles] of groups) {
       if (groupArticles.length < 2) continue;
-
-      const wordSets = groupArticles.map(
-        (a: NewArticleInfo) => getWordSet(a.title),
-      );
+      const wordSets = groupArticles.map((a: PipelineArticle) => getWordSet(a.title));
       let commonWords = new Set(wordSets[0]);
       for (let i = 1; i < wordSets.length; i++) {
-        commonWords = new Set(
-          [...commonWords].filter((w) => wordSets[i].has(w)),
-        );
+        commonWords = new Set([...commonWords].filter((w) => wordSets[i].has(w)));
       }
 
       let clusterId: string;
       if (commonWords.size > 0) {
-        clusterId = crypto
-          .createHash('md5')
-          .update([...commonWords].sort().join(' '))
-          .digest('hex')
-          .slice(0, 16);
+        clusterId = crypto.createHash('md5').update([...commonWords].sort().join(' ')).digest('hex').slice(0, 16);
       } else {
-        clusterId = crypto
-          .createHash('md5')
-          .update(
-            groupArticles
-              .map((a: NewArticleInfo) => a.id)
-              .sort()
-              .join(','),
-          )
-          .digest('hex')
-          .slice(0, 16);
+        clusterId = crypto.createHash('md5').update(groupArticles.map((a: PipelineArticle) => a.id).sort().join(',')).digest('hex').slice(0, 16);
       }
 
-      const ids = groupArticles.map((a: NewArticleInfo) => a.id);
-      await this.db
-        .update(article)
-        .set({ clusterId })
-        .where(inArray(article.id, ids));
+      const ids = groupArticles.map((a: PipelineArticle) => a.id);
+      await this.db.update(article).set({ clusterId }).where(inArray(article.id, ids));
     }
 
     this.logger.log(`Clustering completed: ${groups.size} groups`);
@@ -922,7 +767,6 @@ export class CollectorService {
     `);
 
     const publishThreshold = await this.getConfig('publish_threshold', 75);
-
     const candidatesResult = await this.db.execute(sql`
       SELECT id, source_name, primary_direction, primary_score
       FROM article
@@ -939,7 +783,6 @@ export class CollectorService {
     }
 
     const rows = candidatesResult as unknown as CandidateRow[];
-
     const byDirection = new Map<string, CandidateRow[]>();
     for (const c of rows) {
       const d = normalizeDirection(c.primary_direction) ?? 'model';
@@ -978,19 +821,14 @@ export class CollectorService {
       const src = c.source_name || 'unknown';
       const dir = normalizeDirection(c.primary_direction) ?? 'model';
       if ((sourceCounts.get(src) || 0) >= sourceCap) continue;
-      if (
-        (directionCounts.get(dir) || 0) >= directionCap + 1 &&
-        selected.length < limit - 1
-      ) continue;
+      if ((directionCounts.get(dir) || 0) >= directionCap + 1 && selected.length < limit - 1) continue;
       selected.push(c);
       sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1);
       directionCounts.set(dir, (directionCounts.get(dir) || 0) + 1);
     }
 
     for (let i = 0; i < selected.length; i++) {
-      await this.db.execute(sql`
-        UPDATE article SET front_page_rank = ${100 + i} WHERE id = ${selected[i].id}
-      `);
+      await this.db.execute(sql`UPDATE article SET front_page_rank = ${100 + i} WHERE id = ${selected[i].id}`);
     }
 
     const selectedIds = new Set(selected.map((s: CandidateRow) => s.id));
@@ -999,77 +837,41 @@ export class CollectorService {
       const src = c.source_name || 'unknown';
       const dir = normalizeDirection(c.primary_direction) ?? 'model';
       let reason: string;
-      if ((sourceCounts.get(src) || 0) >= sourceCap) {
-        reason = 'source_cap';
-      } else if ((directionCounts.get(dir) || 0) >= directionCap) {
-        reason = 'direction_cap';
-      } else {
-        reason = 'limit_reached';
-      }
-      await this.db.execute(sql`
-        UPDATE article SET exclude_reason = ${reason} WHERE id = ${c.id}
-      `);
+      if ((sourceCounts.get(src) || 0) >= sourceCap) reason = 'source_cap';
+      else if ((directionCounts.get(dir) || 0) >= directionCap) reason = 'direction_cap';
+      else reason = 'limit_reached';
+      await this.db.execute(sql`UPDATE article SET exclude_reason = ${reason} WHERE id = ${c.id}`);
     }
 
-    this.logger.log(
-      `Front page: selected ${selected.length}/${rows.length} candidates`,
-    );
+    this.logger.log(`Front page: selected ${selected.length}/${rows.length} candidates`);
   }
 
-  // ─── Rescore Pending (AI 补打分) ────────────────────────────
+  // ─── Rescore Pending ──────────────────────────────────────
 
-  async rescorePending(): Promise<{
-    rescored: number;
-    succeeded: number;
-    failed: number;
-  }> {
+  async rescorePending(): Promise<{ rescored: number; succeeded: number; failed: number }> {
     const today = new Date().toISOString().split('T')[0];
     const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
     const aiPerSourceLimit = await this.getConfig('ai_per_source_limit', 30);
     let aiCount = await this.getAiCallCount(today);
 
     const pendingArticles = await this.db
-      .select({
-        id: article.id,
-        title: article.title,
-        sourceName: article.sourceName,
-        feedSourceId: article.feedSourceId,
-      })
+      .select({ id: article.id, title: article.title, sourceName: article.sourceName, feedSourceId: article.feedSourceId })
       .from(article)
-      .where(
-        and(
-          eq(article.aiProcessed, false),
-          sql`${article.publishedAt} > NOW() - INTERVAL '7 days'`,
-          sql`${article.sourceName} != 'arXiv cs.AI'`,
-        ),
-      );
+      .where(and(eq(article.aiProcessed, false), sql`${article.publishedAt} > NOW() - INTERVAL '7 days'`, sql`${article.sourceName} != 'arXiv cs.AI'`));
 
-    this.logger.log(
-      `Rescore pending: found ${pendingArticles.length} articles, ` +
-      `ai count today: ${aiCount}/${aiDailyLimit}`,
-    );
+    this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);
 
     const sourceTiers = new Map<string, string>();
     const allSources = await this.db.select().from(feedSource);
-    for (const s of allSources) {
-      sourceTiers.set(s.id, s.tier);
-    }
+    for (const s of allSources) sourceTiers.set(s.id, s.tier);
 
     const perSourceCount = new Map<string, number>();
     const todayAiArticles = await this.db
       .select({ sourceName: article.sourceName })
       .from(article)
-      .where(
-        and(
-          eq(article.aiProcessed, true),
-          sql`${article.collectedAt}::date = ${today}::date`,
-        ),
-      );
+      .where(and(eq(article.aiProcessed, true), sql`${article.collectedAt}::date = ${today}::date`));
     for (const row of todayAiArticles) {
-      perSourceCount.set(
-        row.sourceName,
-        (perSourceCount.get(row.sourceName) || 0) + 1,
-      );
+      perSourceCount.set(row.sourceName, (perSourceCount.get(row.sourceName) || 0) + 1);
     }
 
     let rescored = 0;
@@ -1077,105 +879,61 @@ export class CollectorService {
     let failed = 0;
 
     for (const art of pendingArticles) {
-      if (aiCount >= aiDailyLimit) {
-        this.logger.log('Rescore: daily AI limit reached, stopping');
-        break;
-      }
+      if (aiCount >= aiDailyLimit) { this.logger.log('Rescore: daily limit reached'); break; }
       const srcUsed = perSourceCount.get(art.sourceName) || 0;
-      if (srcUsed >= aiPerSourceLimit) {
-        this.logger.log(
-          `Rescore: per-source limit reached for ${art.sourceName} (${srcUsed}/${aiPerSourceLimit})`,
-        );
-        continue;
-      }
+      if (srcUsed >= aiPerSourceLimit) continue;
 
       const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
-      const [fullArt] = await this.db
-        .select()
-        .from(article)
-        .where(eq(article.id, art.id));
-
+      const [fullArt] = await this.db.select().from(article).where(eq(article.id, art.id));
       if (!fullArt) continue;
 
       const content = fullArt.summary || art.title;
-
       try {
-        const result = await this.aiScoringService.scoreArticle(
-          art.title,
-          content,
-          tier,
-        );
+        const result = await this.aiScoringService.scoreArticle(art.title, content, tier);
+        if (!result.aiProcessed) { failed++; continue; }
 
-        if (!result.aiProcessed) {
-          failed++;
-          continue;
-        }
-
-        await this.db
-          .delete(directionScore)
-          .where(eq(directionScore.articleId, art.id));
-
+        await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
         for (const dir of DIRECTIONS) {
           const ev = result.directionScores[dir];
           await this.db.insert(directionScore).values({
-            articleId: art.id,
-            direction: dir,
+            articleId: art.id, direction: dir,
             dimensionScores: ev?.dimensionScores ?? {},
             totalScore: ev?.normalizedScore ?? 0,
           });
         }
 
-        await this.db
-          .update(article)
-          .set({
-            primaryDirection: result.primaryDirection,
-            primaryScore: result.publishScore,
-            summary: result.summary,
-            aiProcessed: true,
-            aiDegradeReason: null,
-          })
-          .where(eq(article.id, art.id));
+        await this.db.update(article).set({
+          primaryDirection: result.primaryDirection,
+          primaryScore: result.publishScore,
+          summary: result.summary,
+          aiProcessed: true,
+          aiDegradeReason: null,
+        }).where(eq(article.id, art.id));
 
         aiCount++;
         rescored++;
         succeeded++;
-        perSourceCount.set(
-          art.sourceName,
-          (perSourceCount.get(art.sourceName) || 0) + 1,
-        );
+        perSourceCount.set(art.sourceName, (perSourceCount.get(art.sourceName) || 0) + 1);
         await this.incrementAiCount(today);
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Rescore failed for "${art.title}": ${errMsg}`,
-        );
+        this.logger.error(`Rescore failed for "${art.title}": ${errMsg}`);
         failed++;
       }
     }
 
-    this.logger.log(
-      `Rescore completed: ${rescored} rescored, ${succeeded} succeeded, ${failed} failed`,
-    );
-
+    this.logger.log(`Rescore: ${rescored} rescored, ${succeeded} ok, ${failed} fail`);
     return { rescored, succeeded, failed };
   }
 
-  // ─── Publish Gate ──────────────────────────────────────────
+  // ─── Publish Gate ─────────────────────────────────────────
 
-  private async executePublishGate(
-    articles: { id: string }[],
-    publishThreshold: number,
-  ): Promise<number> {
+  private async executePublishGate(articles: { id: string }[], publishThreshold: number): Promise<number> {
     if (articles.length === 0) return 0;
     const articleIds = articles.map((a) => a.id);
 
     const allArticles = await this.db
-      .select({
-        id: article.id,
-        primaryDirection: article.primaryDirection,
-        primaryScore: article.primaryScore,
-        status: article.status,
-      })
+      .select({ id: article.id, primaryDirection: article.primaryDirection, primaryScore: article.primaryScore, status: article.status })
       .from(article)
       .where(inArray(article.id, articleIds));
 
@@ -1187,9 +945,7 @@ export class CollectorService {
     `) as unknown as { article_id: string; dimension_scores: Record<string, number> }[];
 
     const scoreMap = new Map<string, Record<string, number>>();
-    for (const row of primaryDirScores) {
-      scoreMap.set(row.article_id, row.dimension_scores ?? {});
-    }
+    for (const row of primaryDirScores) scoreMap.set(row.article_id, row.dimension_scores ?? {});
 
     let publishedCount = 0;
     for (const art of allArticles) {
@@ -1202,23 +958,12 @@ export class CollectorService {
       });
 
       if (passes && art.status !== 'published') {
-        await this.db
-          .update(article)
-          .set({ status: 'published' })
-          .where(eq(article.id, art.id));
+        await this.db.update(article).set({ status: 'published' }).where(eq(article.id, art.id));
         publishedCount++;
       } else if (!passes) {
         const updates: Record<string, unknown> = { frontPageRank: null };
-        if (
-          art.status === 'published'
-          && art.primaryDirection !== null
-        ) {
-          updates.status = 'draft';
-        }
-        await this.db
-          .update(article)
-          .set(updates)
-          .where(eq(article.id, art.id));
+        if (art.status === 'published' && art.primaryDirection !== null) updates.status = 'draft';
+        await this.db.update(article).set(updates).where(eq(article.id, art.id));
       }
     }
 
@@ -1227,86 +972,51 @@ export class CollectorService {
 
   // ─── Config Helpers ───────────────────────────────────────
 
-  private async getConfig(
-    key: string,
-    defaultValue: number,
-  ): Promise<number> {
-    const [config] = await this.db
-      .select()
-      .from(appConfig)
-      .where(eq(appConfig.key, key));
+  private async getConfig(key: string, defaultValue: number): Promise<number> {
+    const [config] = await this.db.select().from(appConfig).where(eq(appConfig.key, key));
     if (!config) return defaultValue;
-    return typeof config.value === 'number'
-      ? config.value
-      : parseInt(String(config.value), 10) || defaultValue;
+    return typeof config.value === 'number' ? config.value : parseInt(String(config.value), 10) || defaultValue;
   }
 
   private async getAiCallCount(today: string): Promise<number> {
     const key = `ai_daily_count_${today}`;
-    const [config] = await this.db
-      .select()
-      .from(appConfig)
-      .where(eq(appConfig.key, key));
+    const [config] = await this.db.select().from(appConfig).where(eq(appConfig.key, key));
     if (!config) return 0;
-    return typeof config.value === 'number'
-      ? config.value
-      : parseInt(String(config.value), 10) || 0;
+    return typeof config.value === 'number' ? config.value : parseInt(String(config.value), 10) || 0;
   }
 
   private async incrementAiCount(today: string): Promise<void> {
     const key = `ai_daily_count_${today}`;
     const count = await this.getAiCallCount(today);
-    const [existing] = await this.db
-      .select({ id: appConfig.id })
-      .from(appConfig)
-      .where(eq(appConfig.key, key));
-
+    const [existing] = await this.db.select({ id: appConfig.id }).from(appConfig).where(eq(appConfig.key, key));
     if (existing) {
-      await this.db
-        .update(appConfig)
-        .set({ value: count + 1 })
-        .where(eq(appConfig.key, key));
+      await this.db.update(appConfig).set({ value: count + 1 }).where(eq(appConfig.key, key));
     } else {
-      await this.db.insert(appConfig).values({
-        key,
-        value: 1,
-        description: `AI calls on ${today}`,
-      });
+      await this.db.insert(appConfig).values({ key, value: 1, description: `AI calls on ${today}` });
     }
   }
 
   private async ensureDigest(today: string): Promise<void> {
-    const [existing] = await this.db
-      .select({ id: dailyDigest.id })
-      .from(dailyDigest)
-      .where(eq(dailyDigest.digestDate, today));
-
+    const [existing] = await this.db.select({ id: dailyDigest.id }).from(dailyDigest).where(eq(dailyDigest.digestDate, today));
     if (!existing) {
       try {
         await this.digestService.generateDigest(today);
         this.logger.log(`Digest generated for ${today}`);
       } catch (error: unknown) {
-        const errMsg =
-          error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Failed to generate digest for ${today}: ${errMsg}`,
-        );
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Failed to generate digest: ${errMsg}`);
       }
     }
   }
 
-  // ─── Batch Processing ─────────────────────────────────────
-
-  private async processBatch<T>(
-    items: T[],
-    batchSize: number,
-    fn: (item: T) => Promise<void>,
-  ): Promise<void> {
+  private async processBatch<T>(items: T[], batchSize: number, fn: (item: T) => Promise<void>): Promise<void> {
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
-      await Promise.allSettled(
-        batch.map((item: T) => fn(item)),
-      );
+      await Promise.allSettled(batch.map((item: T) => fn(item)));
     }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

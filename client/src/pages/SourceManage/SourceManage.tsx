@@ -48,7 +48,7 @@ const feedSourceSchema = z.object({
   name: z.string().min(1, '名称不能为空'),
   url: z.string().url('请输入有效的 URL'),
   tier: z.enum(['authoritative', 'validation', 'signal'] as const, { required_error: '请选择层级' }),
-  feedType: z.enum(['rss', 'atom', 'web'] as const, { required_error: '请选择类型' }),
+  feedType: z.enum(['rss', 'atom', 'api', 'web'] as const, { required_error: '请选择类型' }),
 });
 
 type FeedSourceFormData = z.infer<typeof feedSourceSchema>;
@@ -62,6 +62,7 @@ const TIER_CONFIG: Record<Tier, { label: string; bg: string; fg: string }> = {
 const FEED_TYPE_LABELS: Record<FeedType, string> = {
   rss: 'RSS',
   atom: 'Atom',
+  api: 'API',
   web: '网页',
 };
 
@@ -382,6 +383,7 @@ function SourceManage() {
                         <SelectContent>
                           <SelectItem value="rss">RSS</SelectItem>
                           <SelectItem value="atom">Atom</SelectItem>
+                          <SelectItem value="api">API</SelectItem>
                           <SelectItem value="web">网页</SelectItem>
                         </SelectContent>
                       </Select>

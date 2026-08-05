@@ -5,7 +5,7 @@ import {
   normalizeDirection,
   ALL_DIRECTION_IDS,
 } from '../../../shared/directions';
-import type { DimensionScores, DirectionScoreItem } from '../../../shared/api.interface';
+import type { DimensionScores, DirectionScoreItem } from '@shared/api.interface';
 
 const LEGACY_DIM_KEYS = ['novelty', 'depth', 'impact', 'authority', 'timeliness'];
 const LEGACY_CLEAR_SUM = DIMENSION_FULL * 2;

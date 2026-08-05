@@ -10,7 +10,7 @@ export {
 } from './directions';
 
 export type Tier = 'authoritative' | 'validation' | 'signal';
-export type FeedType = 'rss' | 'atom' | 'web';
+export type FeedType = 'rss' | 'atom' | 'api' | 'web';
 export type ArticleStatus = 'published' | 'draft' | 'blocked' | 'pending_review';
 export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable' | 'same_url' | 'same_title' | 'same_batch_url' | 'same_batch_title' | 'source_unreliable';
 export type ReviewStatus = 'pending' | 'approved' | 'rejected';
