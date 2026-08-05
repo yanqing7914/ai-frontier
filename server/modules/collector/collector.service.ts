@@ -12,7 +12,7 @@ import { FeedSourceService } from '../feed-source/feed-source.service';
 import { DigestService } from '../digest/digest.service';
 import { AiScoringService } from './ai-scoring.service';
 import {
-  normalizeUrl, normalizeTitle, shouldTrace, traceFromRssContent,
+  normalizeUrl, normalizeTitle, getOriginPolicy, traceFromRssContent,
 } from './trace-engine';
 import { fetchRawContent, parseRawContent } from './parsers';
 import { normalizeItems, normalizeUrlForDedup } from './pipeline-normalize';
@@ -31,8 +31,8 @@ export type PipelineStage = typeof PIPELINE_STAGE_ORDER[number];
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
 
-interface PipelineArticle { id: string; title: string; url: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; }
-interface RawFetchResponse { feedSourceId: string; feedType: string; url: string; sourceName: string; sourceTier: string; rawContent: string; byteLength: number; httpStatus: number; }
+interface PipelineArticle { id: string; title: string; url: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; sourceName: string; sourceCategoryId: string | null; originPolicy: 'first_party' | 'editorial' | 'aggregator'; }
+interface RawFetchResponse { feedSourceId: string; feedType: string; url: string; sourceName: string; sourceTier: string; sourceCategoryId: string | null; originPolicy: string | null; rawContent: string; byteLength: number; httpStatus: number; }
 
 function jaccardSimilarity(text1: string, text2: string): number {
   const set1 = new Set(text1.toLowerCase().split(/\s+/).filter((w: string) => w.length > 2));
@@ -121,6 +121,7 @@ export class CollectorService {
           this.logger.warn(`Fetch attempt ${attempt}/${retryCount} for "${source.name}": ${errMsg}`);
           if (attempt === retryCount) {
             await this.feedSourceService.updateFetchStats(source.id, false, errMsg);
+            fetchFail++;
             return;
           }
           await this.sleep(1000 * Math.pow(2, attempt - 1));
@@ -133,6 +134,8 @@ export class CollectorService {
         rawResponses.push({
           feedSourceId: source.id, feedType: source.feedType, url: source.url,
           sourceName: source.name, sourceTier: source.tier,
+          sourceCategoryId: source.sourceCategoryId,
+          originPolicy: source.originPolicy,
           rawContent: raw.content, byteLength: raw.byteLength, httpStatus: raw.httpStatus,
         });
       } else { fetchFail++; }
@@ -146,7 +149,7 @@ export class CollectorService {
     }
 
     // ── Stage 3/12: parse ──
-    type ParsedBatch = { items: Array<{ title: string; url: string; canonicalUrl?: string; publishedAt: Date | null; content: string; rawContent: string }>; feedSourceId: string; sourceName: string; sourceTier: string; };
+    type ParsedBatch = { items: Array<{ title: string; url: string; canonicalUrl?: string; publishedAt: Date | null; content: string; rawContent: string }>; feedSourceId: string; sourceName: string; sourceTier: string; sourceCategoryId: string | null; originPolicy: string | null; };
     const allParsedItems: ParsedBatch[] = [];
     let parseOk = 0, parseFail = 0;
     for (const resp of rawResponses) {
@@ -156,7 +159,7 @@ export class CollectorService {
         await this.feedSourceService.updateFetchStats(resp.feedSourceId, false, result.error || 'No items in feed');
       } else {
         parseOk++;
-        allParsedItems.push({ items: result.items, feedSourceId: resp.feedSourceId, sourceName: resp.sourceName, sourceTier: resp.sourceTier });
+        allParsedItems.push({ items: result.items, feedSourceId: resp.feedSourceId, sourceName: resp.sourceName, sourceTier: resp.sourceTier, sourceCategoryId: resp.sourceCategoryId, originPolicy: resp.originPolicy });
       }
     }
     this.logger.log(`[3/12] parse: ok=${parseOk}, fail=${parseFail}, items=${allParsedItems.reduce((s: number, b) => s + b.items.length, 0)}`);
@@ -193,23 +196,39 @@ export class CollectorService {
     }
 
     // Build sourceUrlMap for correct sourceUrl assignment (fix #1)
-    const sourceUrlMap = new Map(sources.map((s) => [s.id, s.url]));
+    const sourceById = new Map(sources.map((source) => [source.id, source]));
 
     // Atomic article insert with onConflictDoNothing (fix #7)
     const allNewArticles: PipelineArticle[] = [];
     for (const item of newItems) {
+      const source = sourceById.get(item.feedSourceId);
+      const originPolicy = getOriginPolicy({
+        originPolicy: source?.originPolicy,
+        tier: item.sourceTier,
+        discoveryUrl: item.url,
+        sourceUrl: source?.url,
+        sourceName: item.sourceName,
+        sourceCategoryId: source?.sourceCategoryId,
+      });
       const inserted = await this.db.insert(article).values({
-        title: item.title, url: item.url, contentHash: item.contentHash,
+        // Keep the feed's original article link; canonical URLs are metadata, not a replacement.
+        title: item.title, url: item.originalUrl, contentHash: item.contentHash,
         sourceName: item.sourceName, feedSourceId: item.feedSourceId,
         publishedAt: item.publishedAt, status: 'draft',
+        originStatus: originPolicy,
+        originEvidence: originPolicy === 'first_party' ? '文章由一手发布源直接采集' : '可信编辑采编内容，无需站外原文作为发布前提',
+        originConfidence: originPolicy === 'first_party' ? 100 : originPolicy === 'editorial' ? 80 : null,
       }).onConflictDoNothing({ target: article.contentHash }).returning({ id: article.id });
       if (inserted.length === 0) continue;
       allNewArticles.push({
         id: inserted[0].id, title: item.title, url: item.url,
         content: item.content, rawContent: item.rawContent,
         feedSourceId: item.feedSourceId,
-        sourceUrl: sourceUrlMap.get(item.feedSourceId) || '',
+        sourceUrl: source?.url || '',
         sourceTier: item.sourceTier,
+        sourceName: item.sourceName,
+        sourceCategoryId: source?.sourceCategoryId ?? null,
+        originPolicy,
       });
     }
     this.logger.log(`Inserted ${allNewArticles.length} new articles`);
@@ -218,7 +237,15 @@ export class CollectorService {
     let traceNeeded = 0, traceOk = 0, traceFail = 0;
     const traceFailIds = new Set<string>();
     for (const art of allNewArticles) {
-      const needsTrace = shouldTrace(art.sourceTier, art.url);
+      const originPolicy = getOriginPolicy({
+        originPolicy: art.originPolicy,
+        tier: art.sourceTier,
+        discoveryUrl: art.url,
+        sourceUrl: art.sourceUrl,
+        sourceName: art.sourceName,
+        sourceCategoryId: art.sourceCategoryId,
+      });
+      const needsTrace = originPolicy === 'aggregator';
       if (!needsTrace) continue;
       traceNeeded++;
       if (await this.traceOrigin(art)) { traceOk++; } else { traceFail++; traceFailIds.add(art.id); }
@@ -323,7 +350,11 @@ export class CollectorService {
       let result;
       let usedAi = false;
 
-      if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit) {
+      if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit
+        && await this.reserveAiCall(today, aiDailyLimit)) {
+        // Reserve before invoking the provider so concurrent runners cannot overspend quota.
+        aiCount++;
+        perSourceCount.set(srcName, srcUsed + 1);
         try {
           result = await this.aiScoringService.scoreArticle(art.title, art.content, tier);
           if (result.aiProcessed) usedAi = true;
@@ -348,7 +379,10 @@ export class CollectorService {
         });
       }
 
-      const articleStatus = (!result.primaryDirection || !result.aiProcessed) ? 'draft' : undefined;
+      // A failed origin trace must remain reviewable even when scoring degrades.
+      const articleStatus = traceFailIds.has(art.id)
+        ? 'pending_review'
+        : (!result.primaryDirection || !result.aiProcessed) ? 'draft' : undefined;
       await this.db.update(article).set({
         primaryDirection: result.primaryDirection,
         primaryScore: result.publishScore,
@@ -360,9 +394,6 @@ export class CollectorService {
 
       if (usedAi) {
         aiUsed++;
-        aiCount++;
-        perSourceCount.set(srcName, (perSourceCount.get(srcName) || 0) + 1);
-        await this.incrementAiCount(today);
       }
     }
     this.logger.log(`[10/12] ai_score: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
@@ -384,6 +415,10 @@ export class CollectorService {
         AND collected_at < NOW() - (${autoApproveHours} || ' hours')::interval
         AND primary_direction IS NOT NULL
         AND (primary_score IS NOT NULL AND primary_score >= ${autoApproveThreshold})
+        AND NOT EXISTS (
+          SELECT 1 FROM review_item ri
+          WHERE ri.article_id = article.id AND ri.status = 'pending'
+        )
       RETURNING id
     `);
     const autoApprovedRows = autoApproved as unknown as { id: string }[];
@@ -399,6 +434,7 @@ export class CollectorService {
     const allArticleIds = [...allArticleIdsSet];
 
     let gateStale = 0, gateUnreliable = 0, gateDead = 0;
+    const blockedAtGateIds = new Set<string>();
     const articlesForGate = await this.db
       .select({ id: article.id, title: article.title, url: article.url, status: article.status, publishedAt: article.publishedAt, feedSourceId: article.feedSourceId })
       .from(article).where(inArray(article.id, allArticleIds));
@@ -436,15 +472,22 @@ export class CollectorService {
         const alive = await this.checkLinkAlive(checkUrl);
         if (!alive.alive) { blocked = true; blockReason = 'link_dead'; blockDetail = alive.detail; gateDead++; }
       }
-      if (blocked) await this.blockArticle(artRow.id, blockReason, blockDetail);
+      if (blocked) {
+        await this.blockArticle(artRow.id, blockReason, blockDetail);
+        blockedAtGateIds.add(artRow.id);
+      }
     }
 
     const dedupPassed = await this.checkDuplicateGates(allNewArticles);
     const gateDup = allNewArticles.length - dedupPassed.length;
-    this.logger.log(`[11/12] quality_gate: passed=${dedupPassed.length}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
+    const gatePassedIds = new Set(dedupPassed.map((art) => art.id));
+    for (const id of allArticleIds) {
+      if (!gateArticleMap.has(id) && !blockedAtGateIds.has(id)) gatePassedIds.add(id);
+    }
+    this.logger.log(`[11/12] quality_gate: passed=${gatePassedIds.size}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
 
     // ── Stage 12/12: publish ──
-    const publishedCount = await this.executePublishGate(dedupPassed, publishThreshold);
+    const publishedCount = await this.executePublishGate([...gatePassedIds].map((id) => ({ id })), publishThreshold);
     await this.selectForFrontPage();
     await this.ensureDigest(today);
     this.logger.log(`[12/12] publish: published=${publishedCount} (threshold=${publishThreshold})`);
@@ -457,11 +500,21 @@ export class CollectorService {
     try {
       const origin = traceFromRssContent(art.url, art.rawContent, art.sourceUrl);
       if (origin) {
-        await this.db.update(article).set({ originalUrl: origin }).where(eq(article.id, art.id));
+        await this.db.update(article).set({
+          originalUrl: origin,
+          originStatus: 'verified_reference',
+          originEvidence: '从聚合/桥接内容中提取到站外候选来源',
+          originConfidence: 70,
+        }).where(eq(article.id, art.id));
         this.logger.log(`Traced "${art.title}" -> ${origin}`);
         return true;
       }
       this.logger.warn(`No origin found for "${art.title}"`);
+      await this.db.update(article).set({
+        originStatus: 'needs_review',
+        originEvidence: '聚合/桥接内容未找到可验证的一手出处',
+        originConfidence: null,
+      }).where(eq(article.id, art.id));
       return false;
     } catch (error: unknown) {
       this.logger.warn(`Origin tracing error for "${art.title}": ${error instanceof Error ? error.message : String(error)}`);
@@ -662,7 +715,11 @@ export class CollectorService {
     const pendingArticles = await this.db
       .select({ id: article.id, title: article.title, sourceName: article.sourceName, feedSourceId: article.feedSourceId })
       .from(article)
-      .where(and(eq(article.aiProcessed, false), sql`${article.publishedAt} > NOW() - INTERVAL '7 days'`, sql`${article.sourceName} != 'arXiv cs.AI'`));
+      .where(and(
+        eq(article.aiProcessed, false),
+        sql`(${article.publishedAt} IS NULL OR ${article.publishedAt} > NOW() - INTERVAL '7 days')`,
+        sql`${article.sourceName} != 'arXiv cs.AI'`,
+      ));
     this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);
 
     const sourceTiers = new Map<string, string>();
@@ -672,9 +729,14 @@ export class CollectorService {
     let rescored = 0, succeeded = 0, failed = 0;
     const rescoredIds = new Set<string>();
     for (const art of pendingArticles) {
-      if (aiCount >= aiDailyLimit) { this.logger.log('Rescore: daily limit reached'); break; }
       const srcUsed = perSourceCount.get(art.sourceName) || 0;
       if (srcUsed >= aiPerSourceLimit) continue;
+      if (!await this.reserveAiCall(today, aiDailyLimit)) {
+        this.logger.log('Rescore: daily limit reached');
+        break;
+      }
+      aiCount++;
+      perSourceCount.set(art.sourceName, srcUsed + 1);
       const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
       const [fullArt] = await this.db.select().from(article).where(eq(article.id, art.id));
       if (!fullArt) continue;
@@ -698,12 +760,9 @@ export class CollectorService {
           aiProcessed: true,
           aiDegradeReason: null,
         }).where(eq(article.id, art.id));
-        aiCount++;
         rescored++;
         succeeded++;
         rescoredIds.add(art.id);
-        perSourceCount.set(art.sourceName, (perSourceCount.get(art.sourceName) || 0) + 1);
-        await this.incrementAiCount(today);
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
         this.logger.error(`Rescore failed for "${art.title}": ${errMsg}`);
@@ -721,7 +780,13 @@ export class CollectorService {
     if (articles.length === 0) return 0;
     const articleIds = articles.map((a) => a.id);
     const allArticles = await this.db
-      .select({ id: article.id, primaryDirection: article.primaryDirection, primaryScore: article.primaryScore, status: article.status })
+      .select({
+        id: article.id,
+        primaryDirection: article.primaryDirection,
+        primaryScore: article.primaryScore,
+        status: article.status,
+        originStatus: article.originStatus,
+      })
       .from(article).where(inArray(article.id, articleIds));
     const primaryDirScores = await this.db.execute(sql`
       SELECT ds.article_id, ds.dimension_scores FROM direction_score ds
@@ -735,6 +800,7 @@ export class CollectorService {
       const passes = canPublishArticle({
         primaryDirection: art.primaryDirection, primaryScore: art.primaryScore,
         status: art.status, dimensionScores: scoreMap.get(art.id) ?? null, publishThreshold,
+        traceStatus: art.originStatus as 'first_party' | 'editorial' | 'verified_reference' | 'needs_review' | 'unknown' | null,
       });
       if (passes && art.status !== 'published') {
         await this.db.update(article).set({ status: 'published' }).where(eq(article.id, art.id));
@@ -760,12 +826,19 @@ export class CollectorService {
     if (!config) return 0;
     return typeof config.value === 'number' ? config.value : parseInt(String(config.value), 10) || 0;
   }
-  private async incrementAiCount(today: string): Promise<void> {
+  /** Atomically reserve a call before invoking the provider. Failed calls consume quota too. */
+  private async reserveAiCall(today: string, limit: number): Promise<boolean> {
     const key = `ai_daily_count_${today}`;
-    const count = await this.getAiCallCount(today);
-    const [existing] = await this.db.select({ id: appConfig.id }).from(appConfig).where(eq(appConfig.key, key));
-    if (existing) await this.db.update(appConfig).set({ value: count + 1 }).where(eq(appConfig.key, key));
-    else await this.db.insert(appConfig).values({ key, value: 1, description: `AI calls on ${today}` });
+    const rows = await this.db.execute(sql`
+      INSERT INTO app_config (key, value, description)
+      SELECT ${key}, '1'::jsonb, ${`AI calls on ${today}`}
+      WHERE ${limit} > 0
+      ON CONFLICT (key) DO UPDATE
+        SET value = to_jsonb(COALESCE((app_config.value #>> '{}')::integer, 0) + 1)
+        WHERE COALESCE((app_config.value #>> '{}')::integer, 0) < ${limit}
+      RETURNING value
+    `);
+    return (rows as unknown as unknown[]).length > 0;
   }
 
   private async ensureDigest(today: string): Promise<void> {

@@ -65,6 +65,7 @@ export class FeedSourceService {
           sourceCategoryId: feedSource.sourceCategoryId,
           primaryDirectionId: feedSource.primaryDirectionId,
           sourceLayer: feedSource.sourceLayer,
+          originPolicy: feedSource.originPolicy,
         })
         .from(feedSource)
         .where(whereClause)
@@ -100,6 +101,7 @@ export class FeedSourceService {
         ? normalizeDirection(row.primaryDirectionId)
         : null,
       sourceLayer: row.sourceLayer ?? null,
+      originPolicy: row.originPolicy as FeedSourceListItem['originPolicy'],
     }));
 
     return { items, total };
@@ -137,6 +139,7 @@ export class FeedSourceService {
           ? dto.directionIds.map((d: string) => normalizeDirection(d))
           : undefined,
         sourceLayer: dto.sourceLayer,
+        originPolicy: dto.originPolicy,
         notes: dto.notes,
       })
       .returning();
@@ -160,6 +163,7 @@ export class FeedSourceService {
       updateData.directionIds = dto.directionIds.map((d: string) => normalizeDirection(d));
     }
     if (dto.sourceLayer !== undefined) updateData.sourceLayer = dto.sourceLayer;
+    if (dto.originPolicy !== undefined) updateData.originPolicy = dto.originPolicy;
     if (dto.notes !== undefined) updateData.notes = dto.notes;
 
     if (Object.keys(updateData).length === 0) {

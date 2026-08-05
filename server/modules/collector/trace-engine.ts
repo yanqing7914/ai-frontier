@@ -36,6 +36,20 @@ export const SECOND_HAND_DOMAINS = [
   'producthunt.com',
 ];
 
+/**
+ * A feed tier describes editorial priority, not whether an article is a
+ * repost. Origin tracing is therefore decided from the source's collection
+ * method and editorial identity instead of treating every signal source as
+ * second-hand content.
+ */
+export type OriginPolicy = 'first_party' | 'editorial' | 'aggregator';
+
+const EDITORIAL_DOMAINS = [
+  '36kr.com', 'jiqizhixin.com', 'qbitai.com', 'infoq.cn',
+  'leiphone.com', 'geekpark.net', 'zhidx.com', 'jazzyear.com',
+  'deeptechchina.com', 'huxiu.com', 'latepost.com',
+];
+
 const AUTHORITATIVE_DOMAINS = [
   'github.com',
   'arxiv.org',
@@ -148,6 +162,42 @@ export function isSecondHandDomain(domain: string): boolean {
   );
 }
 
+function isEditorialDomain(domain: string): boolean {
+  const lower = domain.toLowerCase();
+  return EDITORIAL_DOMAINS.some((ed) => lower === ed || lower.endsWith('.' + ed));
+}
+
+export function getOriginPolicy(input: {
+  originPolicy?: OriginPolicy | string | null;
+  tier?: string | null;
+  discoveryUrl: string;
+  sourceUrl?: string | null;
+  sourceName?: string | null;
+  sourceCategoryId?: string | null;
+}): OriginPolicy {
+  if (input.originPolicy === 'first_party' || input.originPolicy === 'editorial' || input.originPolicy === 'aggregator') {
+    return input.originPolicy;
+  }
+  const sourceUrl = input.sourceUrl ?? '';
+  const sourceName = input.sourceName ?? '';
+  const sourceDomain = getDomain(sourceUrl);
+  const discoveryDomain = getDomain(input.discoveryUrl);
+  const isBridge = /公众号桥接|桥接|rsshub|anyfeeder|聚合|转载/i.test(`${sourceName} ${sourceUrl}`)
+    || sourceDomain.includes('rsshub')
+    || sourceDomain.includes('anyfeeder')
+    || sourceDomain === 'mp.weixin.qq.com';
+
+  if (isBridge) return 'aggregator';
+  if (isAuthoritativeDomain(discoveryDomain) || isAuthoritativeDomain(sourceDomain)) return 'first_party';
+  if (input.sourceCategoryId === 'media_analysis' || isEditorialDomain(discoveryDomain) || isEditorialDomain(sourceDomain)) {
+    return 'editorial';
+  }
+  if (isSecondHandDomain(sourceDomain) || isSecondHandDomain(discoveryDomain)) return 'aggregator';
+  // Validation/signal is a priority, not a provenance assertion. Unknown
+  // sources remain conservative and require evidence until classified.
+  return input.tier === 'authoritative' ? 'first_party' : 'editorial';
+}
+
 function isAuthoritativeDomain(domain: string): boolean {
   const lower = domain.toLowerCase();
   return AUTHORITATIVE_DOMAINS.some(
@@ -234,10 +284,7 @@ export function findBestOrigin(candidates: string[]): string | null {
 }
 
 export function shouldTrace(tier: string, discoveryUrl: string): boolean {
-  const domain = getDomain(discoveryUrl);
-  if (isAuthoritativeDomain(domain)) return false;
-  if (tier === 'signal') return true;
-  return isSecondHandDomain(domain);
+  return getOriginPolicy({ tier, discoveryUrl }) === 'aggregator';
 }
 
 export function normalizeTitle(title: string): string {

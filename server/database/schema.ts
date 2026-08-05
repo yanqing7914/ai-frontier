@@ -267,6 +267,9 @@ export const article = pgTable("article", {
   title: varchar("title", { length: 500 }).notNull(),
   url: varchar("url", { length: 2048 }).notNull(),
   originalUrl: varchar("original_url", { length: 2048 }),
+  originStatus: varchar("origin_status", { length: 50 }),
+  originEvidence: text("origin_evidence"),
+  originConfidence: integer("origin_confidence"),
   contentHash: varchar("content_hash", { length: 64 }).notNull(),
   summary: text("summary"),
   sourceName: varchar("source_name", { length: 255 }).notNull(),
@@ -296,7 +299,8 @@ export const article = pgTable("article", {
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
   index("idx_article_status").on(table.status),
-  index("idx_article_content_hash").on(table.contentHash),
+  // The collector relies on this constraint for atomic ON CONFLICT deduplication.
+  uniqueIndex("article_content_hash_key").on(table.contentHash),
   index("idx_article_cluster_id").on(table.clusterId),
   index("idx_article_primary_direction").on(table.primaryDirection),
   foreignKey({
@@ -324,6 +328,7 @@ export const feedSource = pgTable("feed_source", {
   primaryDirectionId: varchar("primary_direction_id", { length: 50 }),
   directionIds: text("direction_ids").array().default([]),
   sourceLayer: varchar("source_layer", { length: 50 }),
+  originPolicy: varchar("origin_policy", { length: 50 }),
   notes: text("notes"),
   originPolicy: varchar("origin_policy", { length: 50 }),
   // System field: Creation time (auto-filled, do not modify)

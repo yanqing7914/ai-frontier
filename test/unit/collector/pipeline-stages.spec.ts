@@ -147,6 +147,15 @@ describe('Parser failure isolation', () => {
   });
 });
 
+describe('RSS content preservation', () => {
+  it('prefers content:encoded and preserves it as raw content for tracing', async () => {
+    const result = await parseRssContent('<rss>items</rss>');
+    // The mock feed exercises the common RSS path; parser content remains available to normalization.
+    expect(result.items[0].rawContent).toContain('GPT-5');
+    expect(result.items[0].content).toContain('GPT-5');
+  });
+});
+
 describe('normalizeUrlForDedup', () => {
   it('strips tracking params and fragment', () => {
     expect(normalizeUrlForDedup('https://example.com/page?utm_source=twitter&id=1#section'))

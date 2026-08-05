@@ -11,6 +11,8 @@ export {
 
 export type Tier = 'authoritative' | 'validation' | 'signal';
 export type FeedType = 'rss' | 'atom' | 'api' | 'web';
+export type OriginPolicy = 'first_party' | 'editorial' | 'aggregator';
+export type OriginStatus = 'first_party' | 'editorial' | 'verified_reference' | 'needs_review' | 'unknown';
 export type ArticleStatus = 'published' | 'draft' | 'blocked' | 'pending_review';
 export type QualityGateReason = 'link_dead' | 'content_stale' | 'untraceable' | 'same_url' | 'same_title' | 'same_batch_url' | 'same_batch_title' | 'source_unreliable';
 export type ReviewStatus = 'pending' | 'approved' | 'rejected';
@@ -33,6 +35,7 @@ export interface FeedSource {
   primaryDirectionId: string | null;
   directionIds: string[];
   sourceLayer: string | null;
+  originPolicy: OriginPolicy | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +54,7 @@ export interface FeedSourceListItem {
   sourceCategoryId: string | null;
   primaryDirectionId: string | null;
   sourceLayer: string | null;
+  originPolicy: OriginPolicy | null;
 }
 
 export interface FeedSourceHealth {
@@ -73,6 +77,7 @@ export interface CreateFeedSourceRequest {
   primaryDirectionId?: string;
   directionIds?: string[];
   sourceLayer?: string;
+  originPolicy?: OriginPolicy;
   notes?: string;
 }
 
@@ -87,6 +92,7 @@ export interface UpdateFeedSourceRequest {
   primaryDirectionId?: string;
   directionIds?: string[];
   sourceLayer?: string;
+  originPolicy?: OriginPolicy;
   notes?: string;
 }
 
@@ -173,7 +179,7 @@ export interface ReviewActionRequest {
   note?: string;
 }
 
-export type TraceStatus = 'success' | 'failed' | 'not_needed';
+export type TraceStatus = OriginStatus;
 
 export interface ArticleTrace {
   articleId: string;
@@ -181,6 +187,10 @@ export interface ArticleTrace {
   url: string;
   originalUrl: string | null;
   sourceName: string;
+  originPolicy: OriginPolicy;
+  originStatus: OriginStatus;
+  originEvidence: string | null;
+  originConfidence: number | null;
   traced: boolean;
   traceStatus: TraceStatus;
 }
