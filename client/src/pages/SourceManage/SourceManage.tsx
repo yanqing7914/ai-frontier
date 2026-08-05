@@ -33,7 +33,7 @@ import {
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from '@/components/ui/empty';
 import { Database } from 'lucide-react';
 import { logger } from '@lark-apaas/client-toolkit/logger';
-import type { FeedSourceListItem, FeedSourceHealth, Tier, FeedType } from '@shared/api.interface';
+import type { FeedSourceListItem, FeedSourceHealth, Tier, FeedType, OriginPolicy } from '@shared/api.interface';
 import {
   getFeedSources,
   createFeedSource,
@@ -49,6 +49,8 @@ const feedSourceSchema = z.object({
   url: z.string().url('请输入有效的 URL'),
   tier: z.enum(['authoritative', 'validation', 'signal'] as const, { required_error: '请选择层级' }),
   feedType: z.enum(['rss', 'atom', 'api', 'web'] as const, { required_error: '请选择类型' }),
+  sourceCategoryId: z.string().min(1, '请选择信息源分类'),
+  originPolicy: z.enum(['first_party', 'editorial', 'aggregator'] as const),
 });
 
 type FeedSourceFormData = z.infer<typeof feedSourceSchema>;
@@ -66,6 +68,31 @@ const FEED_TYPE_LABELS: Record<FeedType, string> = {
   web: '网页',
 };
 
+const SOURCE_CATEGORY_OPTIONS = [
+  { id: 'research_papers', label: '论文研究' },
+  { id: 'official_release', label: '官方发布' },
+  { id: 'open_source_community', label: '开源社区' },
+  { id: 'evaluation_data', label: '评测数据' },
+  { id: 'infrastructure_supply_chain', label: '基础设施产业链' },
+  { id: 'policy_safety_governance', label: '政策安全治理' },
+  { id: 'media_analysis', label: '媒体分析' },
+  { id: 'interviews_podcasts', label: '访谈播客' },
+] as const;
+
+const SOURCE_CATEGORY_LABELS = Object.fromEntries(
+  SOURCE_CATEGORY_OPTIONS.map((item) => [item.id, item.label]),
+) as Record<string, string>;
+
+const ORIGIN_POLICY_OPTIONS: Array<{ id: OriginPolicy; label: string; hint: string }> = [
+  { id: 'first_party', label: '一手发布', hint: '官方、论文、代码库或机构原文' },
+  { id: 'editorial', label: '编辑采编', hint: '可信媒体原创、采访或独立解读' },
+  { id: 'aggregator', label: '聚合/桥接', hint: '公众号桥接、转载或聚合，需验证出处' },
+];
+
+const ORIGIN_POLICY_LABELS = Object.fromEntries(
+  ORIGIN_POLICY_OPTIONS.map((item) => [item.id, item.label]),
+) as Record<OriginPolicy, string>;
+
 function SourceManage() {
   const [sources, setSources] = useState<FeedSourceListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -80,13 +107,14 @@ function SourceManage() {
 
   const form = useForm<FeedSourceFormData>({
     resolver: zodResolver(feedSourceSchema),
-    defaultValues: { name: '', url: '', tier: 'signal', feedType: 'rss' },
+    defaultValues: { name: '', url: '', tier: 'signal', feedType: 'rss', sourceCategoryId: 'media_analysis', originPolicy: 'editorial' },
   });
 
   const fetchSources = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string | number> = { page: 1, pageSize: 50 };
+      // The source pool is larger than the initial 50-row prototype limit.
+      const params: Record<string, string | number> = { page: 1, pageSize: 200 };
       if (tierFilter !== 'all') params.tier = tierFilter;
       if (enabledFilter !== 'all') params.enabled = enabledFilter;
       const data = await getFeedSources(params);
@@ -104,23 +132,48 @@ function SourceManage() {
 
   const openCreateDialog = () => {
     setEditingSource(null);
-    form.reset({ name: '', url: '', tier: 'signal', feedType: 'rss' });
+    form.reset({ name: '', url: '', tier: 'signal', feedType: 'rss', sourceCategoryId: 'media_analysis', originPolicy: 'editorial' });
     setDialogOpen(true);
   };
 
   const openEditDialog = (source: FeedSourceListItem) => {
     setEditingSource(source);
-    form.reset({ name: source.name, url: source.url, tier: source.tier, feedType: source.feedType });
+    form.reset({
+      name: source.name,
+      url: source.url,
+      tier: source.tier,
+      feedType: source.feedType,
+      sourceCategoryId: source.sourceCategoryId ?? 'media_analysis',
+      originPolicy: source.originPolicy ?? 'editorial',
+    });
     setDialogOpen(true);
   };
 
   const handleSubmit = async (data: FeedSourceFormData) => {
     try {
       if (editingSource) {
-        await updateFeedSource(editingSource.id, { name: data.name, url: data.url, tier: data.tier, feedType: data.feedType });
+        const categoryLabel = SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ?? data.sourceCategoryId;
+        await updateFeedSource(editingSource.id, {
+          name: data.name,
+          url: data.url,
+          tier: data.tier,
+          feedType: data.feedType,
+          sourceCategory: categoryLabel,
+          sourceCategoryId: data.sourceCategoryId,
+          originPolicy: data.originPolicy,
+        });
         toast.success('信息源已更新');
       } else {
-        await createFeedSource({ name: data.name, url: data.url, tier: data.tier, feedType: data.feedType });
+        const categoryLabel = SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ?? data.sourceCategoryId;
+        await createFeedSource({
+          name: data.name,
+          url: data.url,
+          tier: data.tier,
+          feedType: data.feedType,
+          sourceCategory: categoryLabel,
+          sourceCategoryId: data.sourceCategoryId,
+          originPolicy: data.originPolicy,
+        });
         toast.success('信息源已创建');
       }
       setDialogOpen(false);
@@ -217,7 +270,7 @@ function SourceManage() {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="rounded-sm border border-border overflow-hidden">
+        <div className="rounded-sm border border-border overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
@@ -249,7 +302,19 @@ function SourceManage() {
                           ? <ChevronDown className="size-4 text-muted-foreground" />
                           : <ChevronRight className="size-4 text-muted-foreground" />}
                       </td>
-                      <td className="py-3 px-4 font-medium">{source.name}</td>
+                      <td className="py-3 px-4 font-medium">
+                        <div>{source.name}</div>
+                        {source.sourceCategoryId && (
+                          <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                            {SOURCE_CATEGORY_LABELS[source.sourceCategoryId] ?? source.sourceCategory ?? source.sourceCategoryId}
+                          </span>
+                        )}
+                        {source.originPolicy && (
+                          <span className="ml-1 mt-1 inline-flex rounded-full bg-accent px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                            {ORIGIN_POLICY_LABELS[source.originPolicy]}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 max-w-[200px] truncate text-muted-foreground">
                         <UniversalLink to={source.url} target="_blank" rel="noopener noreferrer" className="hover:text-primary flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                           {source.url}
@@ -344,6 +409,24 @@ function SourceManage() {
               />
               <FormField
                 control={form.control}
+                name="originPolicy"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>来源策略 <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="选择来源策略" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {ORIGIN_POLICY_OPTIONS.map((policy) => (
+                          <SelectItem key={policy.id} value={policy.id}>{policy.label}：{policy.hint}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
                 name="url"
                 render={({ field }) => (
                   <FormItem>
@@ -392,6 +475,24 @@ function SourceManage() {
                   )}
                 />
               </div>
+              <FormField
+                control={form.control}
+                name="sourceCategoryId"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>信息源分类 <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="选择信息源分类" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {SOURCE_CATEGORY_OPTIONS.map((category) => (
+                          <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
                 <Button type="submit">{editingSource ? '保存' : '创建'}</Button>

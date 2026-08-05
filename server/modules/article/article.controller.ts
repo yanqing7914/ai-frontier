@@ -76,7 +76,7 @@ export class ArticleController {
     @Query('traceStatus') traceStatus?: string,
   ): Promise<PaginatedResponse<ArticleTrace>> {
     const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
-    const validStatuses: TraceStatus[] = ['success', 'failed', 'not_needed'];
+    const validStatuses: TraceStatus[] = ['first_party', 'editorial', 'verified_reference', 'needs_review', 'unknown'];
     const status = traceStatus && validStatuses.includes(traceStatus as TraceStatus)
       ? (traceStatus as TraceStatus)
       : undefined;

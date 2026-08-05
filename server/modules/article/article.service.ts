@@ -38,7 +38,7 @@ import type {
   TraceStatus,
   ExcludeReason,
 } from '@shared/api.interface';
-import { isSecondHandDomain, getDomain } from '../collector/trace-engine';
+import { getOriginPolicy } from '../collector/trace-engine';
 import { normalizeDirection } from '@shared/api.interface';
 import { ALL_DIRECTION_IDS } from '@shared/directions';
 
@@ -391,8 +391,14 @@ export class ArticleService {
         title: article.title,
         url: article.url,
         originalUrl: article.originalUrl,
+        originStatus: article.originStatus,
+        originEvidence: article.originEvidence,
+        originConfidence: article.originConfidence,
         sourceName: article.sourceName,
         tier: feedSource.tier,
+        sourceUrl: feedSource.url,
+        sourceCategoryId: feedSource.sourceCategoryId,
+        originPolicy: feedSource.originPolicy,
       })
       .from(article)
       .leftJoin(feedSource, eq(article.feedSourceId, feedSource.id))
@@ -404,14 +410,15 @@ export class ArticleService {
     }
 
     const row = rows[0];
-    const hasOrigin = row.originalUrl !== null
-      && row.originalUrl !== ''
-      && row.originalUrl !== row.url;
-    const needsTrace = row.tier === 'signal'
-      || isSecondHandDomain(getDomain(row.url));
-    const traceStatus: TraceStatus = hasOrigin
-      ? 'success'
-      : needsTrace ? 'failed' : 'not_needed';
+    const originPolicy = getOriginPolicy({
+      originPolicy: row.originPolicy,
+      tier: row.tier,
+      discoveryUrl: row.url,
+      sourceUrl: row.sourceUrl,
+      sourceName: row.sourceName,
+      sourceCategoryId: row.sourceCategoryId,
+    });
+    const traceStatus = (row.originStatus ?? originPolicy) as TraceStatus;
 
     return {
       articleId: row.id,
@@ -419,7 +426,11 @@ export class ArticleService {
       url: row.url,
       originalUrl: row.originalUrl,
       sourceName: row.sourceName,
-      traced: hasOrigin,
+      originPolicy,
+      originStatus: traceStatus,
+      originEvidence: row.originEvidence,
+      originConfidence: row.originConfidence,
+      traced: traceStatus === 'verified_reference',
       traceStatus,
     };
   }
@@ -487,22 +498,29 @@ export class ArticleService {
         title: article.title,
         url: article.url,
         originalUrl: article.originalUrl,
+        originStatus: article.originStatus,
+        originEvidence: article.originEvidence,
+        originConfidence: article.originConfidence,
         sourceName: article.sourceName,
         tier: feedSource.tier,
+        sourceUrl: feedSource.url,
+        sourceCategoryId: feedSource.sourceCategoryId,
+        originPolicy: feedSource.originPolicy,
       })
       .from(article)
       .leftJoin(feedSource, eq(article.feedSourceId, feedSource.id))
       .orderBy(desc(article.collectedAt));
 
     const allItems: ArticleTrace[] = rows.map((row) => {
-      const hasOrigin = row.originalUrl !== null
-        && row.originalUrl !== ''
-        && row.originalUrl !== row.url;
-      const needsTrace = row.tier === 'signal'
-        || isSecondHandDomain(getDomain(row.url));
-      const status: TraceStatus = hasOrigin
-        ? 'success'
-        : needsTrace ? 'failed' : 'not_needed';
+      const originPolicy = getOriginPolicy({
+        originPolicy: row.originPolicy,
+        tier: row.tier,
+        discoveryUrl: row.url,
+        sourceUrl: row.sourceUrl,
+        sourceName: row.sourceName,
+        sourceCategoryId: row.sourceCategoryId,
+      });
+      const status = (row.originStatus ?? originPolicy) as TraceStatus;
 
       return {
         articleId: row.id,
@@ -510,7 +528,11 @@ export class ArticleService {
         url: row.url,
         originalUrl: row.originalUrl,
         sourceName: row.sourceName,
-        traced: hasOrigin,
+        originPolicy,
+        originStatus: status,
+        originEvidence: row.originEvidence,
+        originConfidence: row.originConfidence,
+        traced: status === 'verified_reference',
         traceStatus: status,
       };
     });

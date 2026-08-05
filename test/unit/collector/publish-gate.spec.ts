@@ -79,15 +79,19 @@ describe('canPublishArticle', () => {
     expect(canPublishArticle({ ...base, status: 'blocked' })).toBe(false);
   });
 
-  it('rejects trace failures even when every score requirement passes', () => {
-    expect(canPublishArticle({ ...base, traceStatus: 'failed' })).toBe(false);
+  it('rejects unverified aggregation even when every score requirement passes', () => {
+    expect(canPublishArticle({ ...base, traceStatus: 'needs_review' })).toBe(false);
+  });
+
+  it('allows editorial reporting without a separate original URL', () => {
+    expect(canPublishArticle({ ...base, traceStatus: 'editorial' })).toBe(true);
   });
 
   it('allows a successfully rescored article to become a publish candidate', () => {
     expect(canPublishArticle({
       ...base,
       status: 'draft',
-      traceStatus: 'success',
+      traceStatus: 'verified_reference',
     })).toBe(true);
   });
 

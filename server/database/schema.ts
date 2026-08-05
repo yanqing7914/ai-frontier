@@ -267,6 +267,9 @@ export const article = pgTable("article", {
   title: varchar("title", { length: 500 }).notNull(),
   url: varchar("url", { length: 2048 }).notNull(),
   originalUrl: varchar("original_url", { length: 2048 }),
+  originStatus: varchar("origin_status", { length: 50 }),
+  originEvidence: text("origin_evidence"),
+  originConfidence: integer("origin_confidence"),
   contentHash: varchar("content_hash", { length: 64 }).notNull(),
   summary: text("summary"),
   sourceName: varchar("source_name", { length: 255 }).notNull(),
@@ -322,6 +325,7 @@ export const feedSource = pgTable("feed_source", {
   primaryDirectionId: varchar("primary_direction_id", { length: 50 }),
   directionIds: text("direction_ids").array().default([]),
   sourceLayer: varchar("source_layer", { length: 50 }),
+  originPolicy: varchar("origin_policy", { length: 50 }),
   notes: text("notes"),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
