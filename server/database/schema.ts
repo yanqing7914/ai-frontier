@@ -281,6 +281,9 @@ export const article = pgTable("article", {
   aiDegradeReason: text("ai_degrade_reason"),
   frontPageRank: integer("front_page_rank"),
   excludeReason: text("exclude_reason"),
+  originStatus: varchar("origin_status", { length: 50 }),
+  originEvidence: text("origin_evidence"),
+  originConfidence: integer("origin_confidence"),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
@@ -322,6 +325,7 @@ export const feedSource = pgTable("feed_source", {
   directionIds: text("direction_ids").array().default([]),
   sourceLayer: varchar("source_layer", { length: 50 }),
   notes: text("notes"),
+  originPolicy: varchar("origin_policy", { length: 50 }),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
