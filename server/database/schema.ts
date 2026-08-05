@@ -293,7 +293,8 @@ export const article = pgTable("article", {
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
   index("idx_article_status").on(table.status),
-  index("idx_article_content_hash").on(table.contentHash),
+  // The collector relies on this constraint for atomic ON CONFLICT deduplication.
+  uniqueIndex("article_content_hash_key").on(table.contentHash),
   index("idx_article_cluster_id").on(table.clusterId),
   index("idx_article_primary_direction").on(table.primaryDirection),
   foreignKey({

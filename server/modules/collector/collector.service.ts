@@ -121,6 +121,7 @@ export class CollectorService {
           this.logger.warn(`Fetch attempt ${attempt}/${retryCount} for "${source.name}": ${errMsg}`);
           if (attempt === retryCount) {
             await this.feedSourceService.updateFetchStats(source.id, false, errMsg);
+            fetchFail++;
             return;
           }
           await this.sleep(1000 * Math.pow(2, attempt - 1));
@@ -199,7 +200,8 @@ export class CollectorService {
     const allNewArticles: PipelineArticle[] = [];
     for (const item of newItems) {
       const inserted = await this.db.insert(article).values({
-        title: item.title, url: item.url, contentHash: item.contentHash,
+        // Keep the feed's original article link; canonical URLs are metadata, not a replacement.
+        title: item.title, url: item.originalUrl, contentHash: item.contentHash,
         sourceName: item.sourceName, feedSourceId: item.feedSourceId,
         publishedAt: item.publishedAt, status: 'draft',
       }).onConflictDoNothing({ target: article.contentHash }).returning({ id: article.id });
@@ -323,7 +325,11 @@ export class CollectorService {
       let result;
       let usedAi = false;
 
-      if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit) {
+      if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit
+        && await this.reserveAiCall(today, aiDailyLimit)) {
+        // Reserve before invoking the provider so concurrent runners cannot overspend quota.
+        aiCount++;
+        perSourceCount.set(srcName, srcUsed + 1);
         try {
           result = await this.aiScoringService.scoreArticle(art.title, art.content, tier);
           if (result.aiProcessed) usedAi = true;
@@ -348,7 +354,10 @@ export class CollectorService {
         });
       }
 
-      const articleStatus = (!result.primaryDirection || !result.aiProcessed) ? 'draft' : undefined;
+      // A failed origin trace must remain reviewable even when scoring degrades.
+      const articleStatus = traceFailIds.has(art.id)
+        ? 'pending_review'
+        : (!result.primaryDirection || !result.aiProcessed) ? 'draft' : undefined;
       await this.db.update(article).set({
         primaryDirection: result.primaryDirection,
         primaryScore: result.publishScore,
@@ -360,9 +369,6 @@ export class CollectorService {
 
       if (usedAi) {
         aiUsed++;
-        aiCount++;
-        perSourceCount.set(srcName, (perSourceCount.get(srcName) || 0) + 1);
-        await this.incrementAiCount(today);
       }
     }
     this.logger.log(`[10/12] ai_score: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
@@ -384,6 +390,10 @@ export class CollectorService {
         AND collected_at < NOW() - (${autoApproveHours} || ' hours')::interval
         AND primary_direction IS NOT NULL
         AND (primary_score IS NOT NULL AND primary_score >= ${autoApproveThreshold})
+        AND NOT EXISTS (
+          SELECT 1 FROM review_item ri
+          WHERE ri.article_id = article.id AND ri.status = 'pending'
+        )
       RETURNING id
     `);
     const autoApprovedRows = autoApproved as unknown as { id: string }[];
@@ -399,6 +409,7 @@ export class CollectorService {
     const allArticleIds = [...allArticleIdsSet];
 
     let gateStale = 0, gateUnreliable = 0, gateDead = 0;
+    const blockedAtGateIds = new Set<string>();
     const articlesForGate = await this.db
       .select({ id: article.id, title: article.title, url: article.url, status: article.status, publishedAt: article.publishedAt, feedSourceId: article.feedSourceId })
       .from(article).where(inArray(article.id, allArticleIds));
@@ -436,15 +447,22 @@ export class CollectorService {
         const alive = await this.checkLinkAlive(checkUrl);
         if (!alive.alive) { blocked = true; blockReason = 'link_dead'; blockDetail = alive.detail; gateDead++; }
       }
-      if (blocked) await this.blockArticle(artRow.id, blockReason, blockDetail);
+      if (blocked) {
+        await this.blockArticle(artRow.id, blockReason, blockDetail);
+        blockedAtGateIds.add(artRow.id);
+      }
     }
 
     const dedupPassed = await this.checkDuplicateGates(allNewArticles);
     const gateDup = allNewArticles.length - dedupPassed.length;
-    this.logger.log(`[11/12] quality_gate: passed=${dedupPassed.length}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
+    const gatePassedIds = new Set(dedupPassed.map((art) => art.id));
+    for (const id of allArticleIds) {
+      if (!gateArticleMap.has(id) && !blockedAtGateIds.has(id)) gatePassedIds.add(id);
+    }
+    this.logger.log(`[11/12] quality_gate: passed=${gatePassedIds.size}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
 
     // ── Stage 12/12: publish ──
-    const publishedCount = await this.executePublishGate(dedupPassed, publishThreshold);
+    const publishedCount = await this.executePublishGate([...gatePassedIds].map((id) => ({ id })), publishThreshold);
     await this.selectForFrontPage();
     await this.ensureDigest(today);
     this.logger.log(`[12/12] publish: published=${publishedCount} (threshold=${publishThreshold})`);
@@ -662,7 +680,11 @@ export class CollectorService {
     const pendingArticles = await this.db
       .select({ id: article.id, title: article.title, sourceName: article.sourceName, feedSourceId: article.feedSourceId })
       .from(article)
-      .where(and(eq(article.aiProcessed, false), sql`${article.publishedAt} > NOW() - INTERVAL '7 days'`, sql`${article.sourceName} != 'arXiv cs.AI'`));
+      .where(and(
+        eq(article.aiProcessed, false),
+        sql`(${article.publishedAt} IS NULL OR ${article.publishedAt} > NOW() - INTERVAL '7 days')`,
+        sql`${article.sourceName} != 'arXiv cs.AI'`,
+      ));
     this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);
 
     const sourceTiers = new Map<string, string>();
@@ -672,9 +694,14 @@ export class CollectorService {
     let rescored = 0, succeeded = 0, failed = 0;
     const rescoredIds = new Set<string>();
     for (const art of pendingArticles) {
-      if (aiCount >= aiDailyLimit) { this.logger.log('Rescore: daily limit reached'); break; }
       const srcUsed = perSourceCount.get(art.sourceName) || 0;
       if (srcUsed >= aiPerSourceLimit) continue;
+      if (!await this.reserveAiCall(today, aiDailyLimit)) {
+        this.logger.log('Rescore: daily limit reached');
+        break;
+      }
+      aiCount++;
+      perSourceCount.set(art.sourceName, srcUsed + 1);
       const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
       const [fullArt] = await this.db.select().from(article).where(eq(article.id, art.id));
       if (!fullArt) continue;
@@ -698,12 +725,9 @@ export class CollectorService {
           aiProcessed: true,
           aiDegradeReason: null,
         }).where(eq(article.id, art.id));
-        aiCount++;
         rescored++;
         succeeded++;
         rescoredIds.add(art.id);
-        perSourceCount.set(art.sourceName, (perSourceCount.get(art.sourceName) || 0) + 1);
-        await this.incrementAiCount(today);
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
         this.logger.error(`Rescore failed for "${art.title}": ${errMsg}`);
@@ -760,12 +784,19 @@ export class CollectorService {
     if (!config) return 0;
     return typeof config.value === 'number' ? config.value : parseInt(String(config.value), 10) || 0;
   }
-  private async incrementAiCount(today: string): Promise<void> {
+  /** Atomically reserve a call before invoking the provider. Failed calls consume quota too. */
+  private async reserveAiCall(today: string, limit: number): Promise<boolean> {
     const key = `ai_daily_count_${today}`;
-    const count = await this.getAiCallCount(today);
-    const [existing] = await this.db.select({ id: appConfig.id }).from(appConfig).where(eq(appConfig.key, key));
-    if (existing) await this.db.update(appConfig).set({ value: count + 1 }).where(eq(appConfig.key, key));
-    else await this.db.insert(appConfig).values({ key, value: 1, description: `AI calls on ${today}` });
+    const rows = await this.db.execute(sql`
+      INSERT INTO app_config (key, value, description)
+      SELECT ${key}, '1'::jsonb, ${`AI calls on ${today}`}
+      WHERE ${limit} > 0
+      ON CONFLICT (key) DO UPDATE
+        SET value = to_jsonb(COALESCE((app_config.value #>> '{}')::integer, 0) + 1)
+        WHERE COALESCE((app_config.value #>> '{}')::integer, 0) < ${limit}
+      RETURNING value
+    `);
+    return (rows as unknown as unknown[]).length > 0;
   }
 
   private async ensureDigest(today: string): Promise<void> {

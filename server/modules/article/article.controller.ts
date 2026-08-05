@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { ArticleService } from './article.service';
 import type {
   HotArticleItem,
@@ -17,12 +17,11 @@ export class ArticleController {
 
   @Get('hot-articles')
   async getHotArticles(
-    @Query('page') page: string,
-    @Query('pageSize') pageSize: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
     @Query('directions') directions?: string,
   ): Promise<PaginatedResponse<HotArticleItem>> {
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedPageSize = parseInt(pageSize, 10) || 20;
+    const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
     const directionArr = directions
       ? directions.split(',').filter(Boolean)
       : undefined;
@@ -40,14 +39,13 @@ export class ArticleController {
 
   @Get('workbench/articles')
   async getWorkbenchArticles(
-    @Query('page') page: string,
-    @Query('pageSize') pageSize: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
     @Query('status') status?: string,
     @Query('direction') direction?: string,
     @Query('sortBy') sortBy?: string,
   ): Promise<PaginatedResponse<WorkbenchArticleItem>> {
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedPageSize = parseInt(pageSize, 10) || 20;
+    const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
     return this.articleService.getWorkbenchArticles({
       page: parsedPage,
       pageSize: parsedPageSize,
@@ -59,12 +57,11 @@ export class ArticleController {
 
   @Get('workbench/quality-gates')
   async getQualityGates(
-    @Query('page') page: string,
-    @Query('pageSize') pageSize: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
     @Query('reason') reason?: string,
   ): Promise<PaginatedResponse<QualityGateItem>> {
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedPageSize = parseInt(pageSize, 10) || 20;
+    const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
     return this.articleService.getQualityGates({
       page: parsedPage,
       pageSize: parsedPageSize,
@@ -74,12 +71,11 @@ export class ArticleController {
 
   @Get('workbench/trace')
   async getTraceList(
-    @Query('page') page: string,
-    @Query('pageSize') pageSize: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
     @Query('traceStatus') traceStatus?: string,
   ): Promise<PaginatedResponse<ArticleTrace>> {
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedPageSize = parseInt(pageSize, 10) || 20;
+    const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
     const validStatuses: TraceStatus[] = ['success', 'failed', 'not_needed'];
     const status = traceStatus && validStatuses.includes(traceStatus as TraceStatus)
       ? (traceStatus as TraceStatus)
@@ -104,4 +100,28 @@ export class ArticleController {
   ): Promise<ArticleTrace> {
     return this.articleService.getArticleTrace(id);
   }
+}
+
+const DEFAULT_PAGE = 1;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE = 10_000;
+const MAX_PAGE_SIZE = 100;
+
+export function parsePagination(page?: string, pageSize?: string): { page: number; pageSize: number } {
+  return {
+    page: parsePositiveInteger(page, DEFAULT_PAGE, MAX_PAGE, 'page'),
+    pageSize: parsePositiveInteger(pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, 'pageSize'),
+  };
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number, max: number, name: string): number {
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value)) {
+    throw new BadRequestException(`${name} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new BadRequestException(`${name} must be between 1 and ${max}`);
+  }
+  return parsed;
 }

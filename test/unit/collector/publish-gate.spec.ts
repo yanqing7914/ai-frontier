@@ -79,6 +79,18 @@ describe('canPublishArticle', () => {
     expect(canPublishArticle({ ...base, status: 'blocked' })).toBe(false);
   });
 
+  it('rejects trace failures even when every score requirement passes', () => {
+    expect(canPublishArticle({ ...base, traceStatus: 'failed' })).toBe(false);
+  });
+
+  it('allows a successfully rescored article to become a publish candidate', () => {
+    expect(canPublishArticle({
+      ...base,
+      status: 'draft',
+      traceStatus: 'success',
+    })).toBe(true);
+  });
+
   it('rejects when primary_score below threshold', () => {
     expect(canPublishArticle({ ...base, primaryScore: 74 })).toBe(false);
   });
@@ -119,6 +131,16 @@ describe('canPublishArticle', () => {
       dimensionScores: { industry: 0, business_problem: 0 },
       publishThreshold: 75,
     })).toBe(false);
+  });
+
+  it('finds evidence using legacy primary direction ids', () => {
+    expect(canPublishArticle({
+      primaryDirection: 'eval',
+      primaryScore: 80,
+      status: 'draft',
+      dimensionScores: { data_asset: 5 },
+      publishThreshold: 75,
+    })).toBe(true);
   });
 });
 

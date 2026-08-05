@@ -8,7 +8,7 @@ import {
   EmptyDescription,
   EmptyMedia,
 } from '@/components/ui/empty';
-import { Flame, Calendar, ExternalLink, FileText } from 'lucide-react';
+import { Flame, Calendar, ExternalLink, FileText, RefreshCw } from 'lucide-react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
@@ -37,19 +37,24 @@ const DIRECTIONS = [
 const TodayHot = () => {
   const [articles, setArticles] = useState<HotArticleItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number>(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [digestOpen, setDigestOpen] = useState<boolean>(false);
 
   const fetchArticles = useCallback((): void => {
     setLoading(true);
+    setError(null);
     getHotArticles({ page: 1, pageSize: 50 })
       .then((data) => {
-        setArticles(data.items);
-        setTotal(data.total);
+        setArticles(Array.isArray(data.items) ? data.items : []);
+        setTotal(Number.isFinite(data.total) ? data.total : 0);
       })
       .catch((err: unknown) => {
         logger.error(`Failed to fetch hot articles: ${String(err)}`);
+        setArticles([]);
+        setTotal(0);
+        setError('热点文章暂时无法加载，请稍后重试');
         toast.error('获取热点文章失败');
       })
       .finally(() => {
@@ -86,23 +91,24 @@ const TodayHot = () => {
     <div className="min-h-screen" style={{ backgroundColor: 'hsl(220,20%,97%)' }}>
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Status Bar */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex shrink-0 items-center gap-2">
             <Calendar className="size-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
               {dayjs().format('YYYY年MM月DD日')}
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <Button
               variant="outline"
               size="sm"
+              className="shrink-0"
               onClick={() => setDigestOpen(true)}
             >
               <FileText className="size-4" />
               查看今日简报
             </Button>
-            <Badge variant="secondary" className="rounded-full">
+            <Badge variant="secondary" className="shrink-0 rounded-full">
               今日 {total} 条热点
             </Badge>
           </div>
@@ -135,6 +141,20 @@ const TodayHot = () => {
           <div className="flex items-center justify-center py-20">
             <p className="text-sm text-muted-foreground">加载中...</p>
           </div>
+        ) : error ? (
+          <Empty className="border-dashed py-20">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Flame className="size-5" />
+              </EmptyMedia>
+              <EmptyTitle>无法加载今日热点</EmptyTitle>
+              <EmptyDescription>{error}</EmptyDescription>
+              <Button variant="outline" size="sm" onClick={fetchArticles}>
+                <RefreshCw className="size-4" />
+                重试
+              </Button>
+            </EmptyHeader>
+          </Empty>
         ) : filtered.length === 0 ? (
           <Empty className="py-20 border-dashed">
             <EmptyHeader>

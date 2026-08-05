@@ -40,13 +40,16 @@ export interface PublishGateInput {
   status: string;
   dimensionScores: Record<string, number> | null;
   publishThreshold: number;
+  /** A failed origin trace is never eligible for automatic publication. */
+  traceStatus?: 'success' | 'failed' | 'not_needed';
 }
 
 export function canPublishArticle(input: PublishGateInput): boolean {
-  const { primaryDirection, primaryScore, status, dimensionScores, publishThreshold } = input;
+  const { primaryDirection, primaryScore, status, dimensionScores, publishThreshold, traceStatus } = input;
   if (!primaryDirection) return false;
   if (!normalizeDirection(primaryDirection)) return false;
   if (status === 'pending_review' || status === 'blocked') return false;
+  if (traceStatus === 'failed') return false;
   if ((primaryScore ?? 0) < publishThreshold) return false;
   if (!hasCoreEvidence(dimensionScores, primaryDirection)) return false;
   return true;
