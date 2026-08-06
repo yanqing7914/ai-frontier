@@ -64,10 +64,6 @@ export class DigestService {
       .from(dailyDigest)
       .where(eq(dailyDigest.digestDate, dateStr));
 
-    if (existing) {
-      return this.getDigestByDate(dateStr);
-    }
-
     const articles = await this.db
       .select({
         id: article.id,
@@ -89,15 +85,30 @@ export class DigestService {
     );
     const summary = `今日共 ${articles.length} 条 AI 热点：${summaryParts.join('；')}`;
 
-    const [inserted] = await this.db
-      .insert(dailyDigest)
-      .values({
-        digestDate: dateStr,
-        summary,
-        articleCount: articles.length,
-        articleIds: articles.map((a) => a.id),
-      })
-      .returning();
+    let digestRow = existing;
+    if (existing) {
+      const [updated] = await this.db
+        .update(dailyDigest)
+        .set({
+          summary,
+          articleCount: articles.length,
+          articleIds: articles.map((a) => a.id),
+        })
+        .where(eq(dailyDigest.id, existing.id))
+        .returning();
+      digestRow = updated;
+    } else {
+      const [inserted] = await this.db
+        .insert(dailyDigest)
+        .values({
+          digestDate: dateStr,
+          summary,
+          articleCount: articles.length,
+          articleIds: articles.map((a) => a.id),
+        })
+        .returning();
+      digestRow = inserted;
+    }
 
     const digestArticles: DailyDigestArticle[] = articles.map((a) => ({
       id: a.id,
@@ -107,10 +118,10 @@ export class DigestService {
     }));
 
     return {
-      id: inserted.id,
-      digestDate: inserted.digestDate,
-      summary: inserted.summary ?? '',
-      articleCount: inserted.articleCount,
+      id: digestRow.id,
+      digestDate: digestRow.digestDate,
+      summary: digestRow.summary ?? '',
+      articleCount: digestRow.articleCount,
       articles: digestArticles,
     };
   }

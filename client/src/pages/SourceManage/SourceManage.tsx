@@ -1,10 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
-import { Plus, Pencil, Trash2, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -30,10 +37,21 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
-import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from '@/components/ui/empty';
+import {
+  Empty,
+  EmptyHeader,
+  EmptyTitle,
+  EmptyDescription,
+} from '@/components/ui/empty';
 import { Database } from 'lucide-react';
 import { logger } from '@lark-apaas/client-toolkit/logger';
-import type { FeedSourceListItem, FeedSourceHealth, Tier, FeedType, OriginPolicy } from '@shared/api.interface';
+import type {
+  FeedSourceListItem,
+  FeedSourceHealth,
+  Tier,
+  FeedType,
+  OriginPolicy,
+} from '@shared/api.interface';
 import {
   getFeedSources,
   createFeedSource,
@@ -47,8 +65,12 @@ import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLi
 const feedSourceSchema = z.object({
   name: z.string().min(1, '名称不能为空'),
   url: z.string().url('请输入有效的 URL'),
-  tier: z.enum(['authoritative', 'validation', 'signal'] as const, { required_error: '请选择层级' }),
-  feedType: z.enum(['rss', 'atom', 'api', 'web'] as const, { required_error: '请选择类型' }),
+  tier: z.enum(['authoritative', 'validation', 'signal'] as const, {
+    required_error: '请选择层级',
+  }),
+  feedType: z.enum(['rss', 'atom', 'api', 'web'] as const, {
+    required_error: '请选择类型',
+  }),
   sourceCategoryId: z.string().min(1, '请选择信息源分类'),
   originPolicy: z.enum(['first_party', 'editorial', 'aggregator'] as const),
 });
@@ -56,7 +78,11 @@ const feedSourceSchema = z.object({
 type FeedSourceFormData = z.infer<typeof feedSourceSchema>;
 
 const TIER_CONFIG: Record<Tier, { label: string; bg: string; fg: string }> = {
-  authoritative: { label: '权威', bg: 'hsl(220,75%,45%)', fg: 'hsl(0,0%,100%)' },
+  authoritative: {
+    label: '权威',
+    bg: 'hsl(220,75%,45%)',
+    fg: 'hsl(0,0%,100%)',
+  },
   validation: { label: '验证', bg: 'hsl(210,60%,90%)', fg: 'hsl(210,60%,25%)' },
   signal: { label: '信号', bg: 'hsl(220,15%,90%)', fg: 'hsl(220,12%,40%)' },
 };
@@ -83,10 +109,22 @@ const SOURCE_CATEGORY_LABELS = Object.fromEntries(
   SOURCE_CATEGORY_OPTIONS.map((item) => [item.id, item.label]),
 ) as Record<string, string>;
 
-const ORIGIN_POLICY_OPTIONS: Array<{ id: OriginPolicy; label: string; hint: string }> = [
-  { id: 'first_party', label: '一手发布', hint: '官方、论文、代码库或机构原文' },
+const ORIGIN_POLICY_OPTIONS: Array<{
+  id: OriginPolicy;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: 'first_party',
+    label: '一手发布',
+    hint: '官方、论文、代码库或机构原文',
+  },
   { id: 'editorial', label: '编辑采编', hint: '可信媒体原创、采访或独立解读' },
-  { id: 'aggregator', label: '聚合/桥接', hint: '公众号桥接、转载或聚合，需验证出处' },
+  {
+    id: 'aggregator',
+    label: '聚合/桥接',
+    hint: '公众号桥接、转载或聚合，需验证出处',
+  },
 ];
 
 const ORIGIN_POLICY_LABELS = Object.fromEntries(
@@ -100,21 +138,37 @@ function SourceManage() {
   const [tierFilter, setTierFilter] = useState<string>('all');
   const [enabledFilter, setEnabledFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSource, setEditingSource] = useState<FeedSourceListItem | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<FeedSourceListItem | null>(null);
+  const [editingSource, setEditingSource] = useState<FeedSourceListItem | null>(
+    null,
+  );
+  const [deleteConfirm, setDeleteConfirm] = useState<FeedSourceListItem | null>(
+    null,
+  );
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [healthData, setHealthData] = useState<Record<string, FeedSourceHealth>>({});
+  const [healthData, setHealthData] = useState<
+    Record<string, FeedSourceHealth>
+  >({});
 
   const form = useForm<FeedSourceFormData>({
     resolver: zodResolver(feedSourceSchema),
-    defaultValues: { name: '', url: '', tier: 'signal', feedType: 'rss', sourceCategoryId: 'media_analysis', originPolicy: 'editorial' },
+    defaultValues: {
+      name: '',
+      url: '',
+      tier: 'signal',
+      feedType: 'rss',
+      sourceCategoryId: 'media_analysis',
+      originPolicy: 'editorial',
+    },
   });
 
   const fetchSources = useCallback(async () => {
     setLoading(true);
     try {
       // The source pool is larger than the initial 50-row prototype limit.
-      const params: Record<string, string | number> = { page: 1, pageSize: 200 };
+      const params: Record<string, string | number> = {
+        page: 1,
+        pageSize: 200,
+      };
       if (tierFilter !== 'all') params.tier = tierFilter;
       if (enabledFilter !== 'all') params.enabled = enabledFilter;
       const data = await getFeedSources(params);
@@ -128,11 +182,20 @@ function SourceManage() {
     }
   }, [tierFilter, enabledFilter]);
 
-  useEffect(() => { fetchSources(); }, [fetchSources]);
+  useEffect(() => {
+    fetchSources();
+  }, [fetchSources]);
 
   const openCreateDialog = () => {
     setEditingSource(null);
-    form.reset({ name: '', url: '', tier: 'signal', feedType: 'rss', sourceCategoryId: 'media_analysis', originPolicy: 'editorial' });
+    form.reset({
+      name: '',
+      url: '',
+      tier: 'signal',
+      feedType: 'rss',
+      sourceCategoryId: 'media_analysis',
+      originPolicy: 'editorial',
+    });
     setDialogOpen(true);
   };
 
@@ -152,7 +215,9 @@ function SourceManage() {
   const handleSubmit = async (data: FeedSourceFormData) => {
     try {
       if (editingSource) {
-        const categoryLabel = SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ?? data.sourceCategoryId;
+        const categoryLabel =
+          SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ??
+          data.sourceCategoryId;
         await updateFeedSource(editingSource.id, {
           name: data.name,
           url: data.url,
@@ -164,7 +229,9 @@ function SourceManage() {
         });
         toast.success('信息源已更新');
       } else {
-        const categoryLabel = SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ?? data.sourceCategoryId;
+        const categoryLabel =
+          SOURCE_CATEGORY_LABELS[data.sourceCategoryId] ??
+          data.sourceCategoryId;
         await createFeedSource({
           name: data.name,
           url: data.url,
@@ -226,7 +293,11 @@ function SourceManage() {
 
   const formatSuccessRate = (rate: number): string => `${rate.toFixed(0)}%`;
   const rateColor = (rate: number): string =>
-    rate >= 80 ? 'text-[hsl(150_60%_40%)]' : rate >= 50 ? 'text-[hsl(35_85%_55%)]' : 'text-[hsl(5_70%_50%)]';
+    rate >= 80
+      ? 'text-[hsl(150_60%_40%)]'
+      : rate >= 50
+        ? 'text-[hsl(35_85%_55%)]'
+        : 'text-[hsl(5_70%_50%)]';
 
   return (
     <div className="space-y-4">
@@ -266,7 +337,9 @@ function SourceManage() {
         <Empty className="py-12">
           <EmptyHeader>
             <EmptyTitle>暂无信息源</EmptyTitle>
-            <EmptyDescription>点击「新增信息源」添加第一个 RSS 信息源</EmptyDescription>
+            <EmptyDescription>
+              点击「新增信息源」添加第一个 RSS 信息源
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
@@ -275,14 +348,30 @@ function SourceManage() {
             <thead>
               <tr className="border-b border-border bg-muted/30">
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground w-6" />
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">名称</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">URL</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">层级</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">类型</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">启用</th>
-                <th className="text-right py-3 px-4 font-medium text-muted-foreground">成功率</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">最后成功</th>
-                <th className="text-right py-3 px-4 font-medium text-muted-foreground">操作</th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  名称
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  URL
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  层级
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  类型
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  启用
+                </th>
+                <th className="text-right py-3 px-4 font-medium text-muted-foreground">
+                  成功率
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  最后成功
+                </th>
+                <th className="text-right py-3 px-4 font-medium text-muted-foreground">
+                  操作
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -291,22 +380,25 @@ function SourceManage() {
                 const isExpanded = expandedId === source.id;
                 const health = healthData[source.id];
                 return (
-                  <>
+                  <Fragment key={source.id}>
                     <tr
-                      key={source.id}
                       className="border-b border-border hover:bg-accent/30 cursor-pointer"
                       onClick={() => toggleExpand(source.id)}
                     >
                       <td className="py-3 px-4">
-                        {isExpanded
-                          ? <ChevronDown className="size-4 text-muted-foreground" />
-                          : <ChevronRight className="size-4 text-muted-foreground" />}
+                        {isExpanded ? (
+                          <ChevronDown className="size-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="size-4 text-muted-foreground" />
+                        )}
                       </td>
                       <td className="py-3 px-4 font-medium">
                         <div>{source.name}</div>
                         {source.sourceCategoryId && (
                           <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
-                            {SOURCE_CATEGORY_LABELS[source.sourceCategoryId] ?? source.sourceCategory ?? source.sourceCategoryId}
+                            {SOURCE_CATEGORY_LABELS[source.sourceCategoryId] ??
+                              source.sourceCategory ??
+                              source.sourceCategoryId}
                           </span>
                         )}
                         {source.originPolicy && (
@@ -316,7 +408,13 @@ function SourceManage() {
                         )}
                       </td>
                       <td className="py-3 px-4 max-w-[200px] truncate text-muted-foreground">
-                        <UniversalLink to={source.url} target="_blank" rel="noopener noreferrer" className="hover:text-primary flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <UniversalLink
+                          to={source.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-primary flex items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {source.url}
                           <ExternalLink className="size-3 shrink-0" />
                         </UniversalLink>
@@ -324,53 +422,98 @@ function SourceManage() {
                       <td className="py-3 px-4">
                         <span
                           className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium"
-                          style={{ backgroundColor: tierConf.bg, color: tierConf.fg }}
+                          style={{
+                            backgroundColor: tierConf.bg,
+                            color: tierConf.fg,
+                          }}
                         >
                           {tierConf.label}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-muted-foreground">{FEED_TYPE_LABELS[source.feedType]}</td>
-                      <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
-                        <Switch checked={source.enabled} onCheckedChange={() => handleToggle(source)} />
+                      <td className="py-3 px-4 text-muted-foreground">
+                        {FEED_TYPE_LABELS[source.feedType]}
                       </td>
-                      <td className={`py-3 px-4 text-right font-mono ${rateColor(source.successRate)}`}>
+                      <td
+                        className="py-3 px-4"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Switch
+                          checked={source.enabled}
+                          onCheckedChange={() => handleToggle(source)}
+                        />
+                      </td>
+                      <td
+                        className={`py-3 px-4 text-right font-mono ${rateColor(source.successRate)}`}
+                      >
                         {formatSuccessRate(source.successRate)}
                       </td>
                       <td className="py-3 px-4 text-muted-foreground text-xs">
-                        {source.lastSuccessAt ? dayjs(source.lastSuccessAt).format('MM/DD HH:mm') : '从未'}
+                        {source.lastSuccessAt
+                          ? dayjs(source.lastSuccessAt).format('MM/DD HH:mm')
+                          : '从未'}
                       </td>
-                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                      <td
+                        className="py-3 px-4 text-right"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="icon" className="size-7" onClick={() => openEditDialog(source)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={() => openEditDialog(source)}
+                          >
                             <Pencil className="size-3.5" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="size-7 text-destructive" onClick={() => setDeleteConfirm(source)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-destructive"
+                            onClick={() => setDeleteConfirm(source)}
+                          >
                             <Trash2 className="size-3.5" />
                           </Button>
                         </div>
                       </td>
                     </tr>
                     {isExpanded && (
-                      <tr key={`${source.id}-health`}>
+                      <tr>
                         <td colSpan={9} className="bg-muted/20 px-4 py-3">
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                             <div>
-                              <span className="text-muted-foreground">总抓取次数</span>
-                              <p className="font-mono font-medium">{health?.totalFetches ?? '-'}</p>
+                              <span className="text-muted-foreground">
+                                总抓取次数
+                              </span>
+                              <p className="font-mono font-medium">
+                                {health?.totalFetches ?? '-'}
+                              </p>
                             </div>
                             <div>
-                              <span className="text-muted-foreground">成功次数</span>
-                              <p className="font-mono font-medium">{health?.successFetches ?? '-'}</p>
+                              <span className="text-muted-foreground">
+                                成功次数
+                              </span>
+                              <p className="font-mono font-medium">
+                                {health?.successFetches ?? '-'}
+                              </p>
                             </div>
                             <div>
-                              <span className="text-muted-foreground">连续失败</span>
-                              <p className={`font-mono font-medium ${health && health.consecutiveFailures > 0 ? 'text-destructive' : ''}`}>
+                              <span className="text-muted-foreground">
+                                连续失败
+                              </span>
+                              <p
+                                className={`font-mono font-medium ${health && health.consecutiveFailures > 0 ? 'text-destructive' : ''}`}
+                              >
                                 {health?.consecutiveFailures ?? '-'}
                               </p>
                             </div>
                             <div>
-                              <span className="text-muted-foreground">最近错误</span>
-                              <p className="text-xs text-muted-foreground truncate max-w-[200px]" title={health?.lastError ?? ''}>
+                              <span className="text-muted-foreground">
+                                最近错误
+                              </span>
+                              <p
+                                className="text-xs text-muted-foreground truncate max-w-[200px]"
+                                title={health?.lastError ?? ''}
+                              >
                                 {health?.lastError || '无'}
                               </p>
                             </div>
@@ -378,7 +521,7 @@ function SourceManage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -392,17 +535,26 @@ function SourceManage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingSource ? '编辑信息源' : '新增信息源'}</DialogTitle>
+            <DialogTitle>
+              {editingSource ? '编辑信息源' : '新增信息源'}
+            </DialogTitle>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+            <form
+              onSubmit={form.handleSubmit(handleSubmit)}
+              className="space-y-4"
+            >
               <FormField
                 control={form.control}
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>名称 <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input placeholder="如 OpenAI Blog" {...field} /></FormControl>
+                    <FormLabel>
+                      名称 <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input placeholder="如 OpenAI Blog" {...field} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -412,12 +564,20 @@ function SourceManage() {
                 name="originPolicy"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>来源策略 <span className="text-destructive">*</span></FormLabel>
+                    <FormLabel>
+                      来源策略 <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="选择来源策略" /></SelectTrigger></FormControl>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择来源策略" />
+                        </SelectTrigger>
+                      </FormControl>
                       <SelectContent>
                         {ORIGIN_POLICY_OPTIONS.map((policy) => (
-                          <SelectItem key={policy.id} value={policy.id}>{policy.label}：{policy.hint}</SelectItem>
+                          <SelectItem key={policy.id} value={policy.id}>
+                            {policy.label}：{policy.hint}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -430,8 +590,12 @@ function SourceManage() {
                 name="url"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>URL <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input placeholder="https://..." {...field} /></FormControl>
+                    <FormLabel>
+                      URL <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <FormControl>
+                      <Input placeholder="https://..." {...field} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -442,9 +606,18 @@ function SourceManage() {
                   name="tier"
                   render={({ field }) => (
                     <FormItem className="flex-1">
-                      <FormLabel>层级 <span className="text-destructive">*</span></FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl><SelectTrigger><SelectValue placeholder="选择层级" /></SelectTrigger></FormControl>
+                      <FormLabel>
+                        层级 <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择层级" />
+                          </SelectTrigger>
+                        </FormControl>
                         <SelectContent>
                           <SelectItem value="authoritative">权威</SelectItem>
                           <SelectItem value="validation">验证</SelectItem>
@@ -460,9 +633,18 @@ function SourceManage() {
                   name="feedType"
                   render={({ field }) => (
                     <FormItem className="flex-1">
-                      <FormLabel>类型 <span className="text-destructive">*</span></FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl><SelectTrigger><SelectValue placeholder="选择类型" /></SelectTrigger></FormControl>
+                      <FormLabel>
+                        类型 <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择类型" />
+                          </SelectTrigger>
+                        </FormControl>
                         <SelectContent>
                           <SelectItem value="rss">RSS</SelectItem>
                           <SelectItem value="atom">Atom</SelectItem>
@@ -480,12 +662,20 @@ function SourceManage() {
                 name="sourceCategoryId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>信息源分类 <span className="text-destructive">*</span></FormLabel>
+                    <FormLabel>
+                      信息源分类 <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="选择信息源分类" /></SelectTrigger></FormControl>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择信息源分类" />
+                        </SelectTrigger>
+                      </FormControl>
                       <SelectContent>
                         {SOURCE_CATEGORY_OPTIONS.map((category) => (
-                          <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                          <SelectItem key={category.id} value={category.id}>
+                            {category.label}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -494,7 +684,13 @@ function SourceManage() {
                 )}
               />
               <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDialogOpen(false)}
+                >
+                  取消
+                </Button>
                 <Button type="submit">{editingSource ? '保存' : '创建'}</Button>
               </div>
             </form>
@@ -502,7 +698,10 @@ function SourceManage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
+      <Dialog
+        open={!!deleteConfirm}
+        onOpenChange={(open) => !open && setDeleteConfirm(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
@@ -511,8 +710,12 @@ function SourceManage() {
             确定要删除「{deleteConfirm?.name}」吗？此操作不可撤销。
           </p>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>取消</Button>
-            <Button variant="destructive" onClick={handleDelete}>删除</Button>
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              删除
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

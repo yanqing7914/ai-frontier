@@ -6,7 +6,7 @@ import {
 import { eq, ne, inArray, and, isNotNull, sql } from 'drizzle-orm';
 import {
   article, feedSource, directionScore, qualityGate,
-  reviewItem, appConfig, dailyDigest,
+  reviewItem, appConfig,
 } from '@server/database/schema';
 import { FeedSourceService } from '../feed-source/feed-source.service';
 import { DigestService } from '../digest/digest.service';
@@ -22,8 +22,8 @@ import { ALL_DIRECTION_IDS as DIRECTIONS } from '@shared/directions';
 import { canPublishArticle } from './publish-gate';
 
 export const PIPELINE_STAGE_ORDER = [
-  'source_snapshot', 'fetch', 'parse', 'normalize', 'url_dedup', 'trace',
-  'classify', 'cluster', 'rule_score', 'ai_score', 'quality_gate', 'publish',
+  'source_ingest', 'scheduled_fetch', 'parse', 'normalize', 'url_dedup', 'trace',
+  'classify', 'cluster', 'rule_score', 'ai_score', 'quality_gate', 'publish_outputs',
 ] as const;
 
 export type PipelineStage = typeof PIPELINE_STAGE_ORDER[number];
@@ -64,6 +64,7 @@ export class CollectorService {
     const startTime = Date.now();
     try { await this.executeFullPipeline(); } catch (error: unknown) {
       this.logger.error(`Pipeline failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     } finally {
       this.pipelineRunning = false;
       this.logger.log(`Pipeline finished in ${(((Date.now() - startTime) / 1000)).toFixed(1)}s`);
@@ -73,7 +74,7 @@ export class CollectorService {
   /** Log all remaining stages from `from` (1-indexed) as skipped/empty. */
   private logEmptyStages(from: number): void {
     const msgs: Record<number, string> = {
-      2: '[2/12] fetch: skipped, ok=0, fail=0, bytes=0',
+      2: '[2/12] scheduled_fetch: skipped, ok=0, fail=0, bytes=0',
       3: '[3/12] parse: skipped, ok=0, fail=0, items=0',
       4: '[4/12] normalize: skipped, passed=0, dropped=0',
       5: '[5/12] url_dedup: skipped, passed=0, deduped=0',
@@ -83,7 +84,7 @@ export class CollectorService {
       9: '[9/12] rule_score: skipped, ok=0, fail=0',
       10: '[10/12] ai_score: skipped, ai=0, degraded=0',
       11: '[11/12] quality_gate: skipped, passed=0',
-      12: '[12/12] publish: skipped, published=0',
+      12: '[12/12] publish_outputs: skipped, published=0, digest=ensured',
     };
     for (let i = from; i <= 12; i++) {
       if (msgs[i]) this.logger.log(msgs[i]);
@@ -97,17 +98,17 @@ export class CollectorService {
     const retryCount = await this.getConfig('fetch_retry_count', 3);
     const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
 
-    // ── Stage 1/12: source_snapshot ──
+    // ── Stage 1/12: source_ingest ──
     const sources = await this.db.select().from(feedSource).where(eq(feedSource.enabled, true));
     if (sources.length === 0) {
-      this.logger.log('[1/12] source_snapshot: 0 enabled sources');
+      this.logger.log('[1/12] source_ingest: 0 enabled sources');
       this.logEmptyStages(2);
       await this.ensureDigest(today);
       return;
     }
-    this.logger.log(`[1/12] source_snapshot: ${sources.length} enabled sources`);
+    this.logger.log(`[1/12] source_ingest: ${sources.length} enabled sources`);
 
-    // ── Stage 2/12: fetch ──
+    // ── Stage 2/12: scheduled_fetch ──
     const rawResponses: RawFetchResponse[] = [];
     let fetchOk = 0, fetchFail = 0, fetchBytesTotal = 0;
     await this.processBatch(sources, concurrency, async (source) => {
@@ -140,7 +141,7 @@ export class CollectorService {
         });
       } else { fetchFail++; }
     });
-    this.logger.log(`[2/12] fetch: ok=${fetchOk}, fail=${fetchFail}, bytes=${fetchBytesTotal}`);
+    this.logger.log(`[2/12] scheduled_fetch: ok=${fetchOk}, fail=${fetchFail}, bytes=${fetchBytesTotal}`);
 
     if (rawResponses.length === 0) {
       this.logEmptyStages(3);
@@ -156,7 +157,7 @@ export class CollectorService {
       const result = await parseRawContent(resp.feedType, resp.rawContent, resp.url);
       if (result.error || result.items.length === 0) {
         parseFail++;
-        await this.feedSourceService.updateFetchStats(resp.feedSourceId, false, result.error || 'No items in feed');
+        this.logger.warn(`Parse failed for "${resp.sourceName}": ${result.error || 'No items in feed'}`);
       } else {
         parseOk++;
         allParsedItems.push({ items: result.items, feedSourceId: resp.feedSourceId, sourceName: resp.sourceName, sourceTier: resp.sourceTier, sourceCategoryId: resp.sourceCategoryId, originPolicy: resp.originPolicy });
@@ -214,7 +215,7 @@ export class CollectorService {
         // Keep the feed's original article link; canonical URLs are metadata, not a replacement.
         title: item.title, url: item.originalUrl, contentHash: item.contentHash,
         sourceName: item.sourceName, feedSourceId: item.feedSourceId,
-        publishedAt: item.publishedAt, status: 'draft',
+        publishedAt: item.publishedAt ?? new Date(), status: 'draft',
         originStatus: originPolicy,
         originEvidence: originPolicy === 'first_party' ? '文章由一手发布源直接采集' : '可信编辑采编内容，无需站外原文作为发布前提',
         originConfidence: originPolicy === 'first_party' ? 100 : originPolicy === 'editorial' ? 80 : null,
@@ -358,10 +359,12 @@ export class CollectorService {
         try {
           result = await this.aiScoringService.scoreArticle(art.title, art.content, tier);
           if (result.aiProcessed) usedAi = true;
+          else aiDegraded++;
         } catch (outerError: unknown) {
           const errType = outerError instanceof Error ? outerError.constructor.name : typeof outerError;
           const errMsg = outerError instanceof Error ? outerError.message : String(outerError);
           result = { ...this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier, `[${errType}] ${errMsg}`) };
+          aiDegraded++;
         }
       } else {
         const reason = aiCount >= aiDailyLimit ? 'ai_daily_limit_reached' : `per_source_limit_reached(${srcName}:${srcUsed}/${aiPerSourceLimit})`;
@@ -399,7 +402,12 @@ export class CollectorService {
     this.logger.log(`[10/12] ai_score: ai=${aiUsed}/${aiDailyLimit}, degraded=${aiDegraded}`);
 
     // Rescore pending with shared counters (fix #5, #6)
-    const rescoreResult = await this.rescorePending({ aiCount, perSourceCount, today });
+    const rescoreResult = await this.rescorePending({
+      aiCount,
+      perSourceCount,
+      today,
+      excludeIds: new Set(allNewArticles.map((art) => art.id)),
+    });
     this.logger.log(`Rescore pre-gate: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
 
     // ── Stage 11/12: quality_gate ──
@@ -486,11 +494,11 @@ export class CollectorService {
     }
     this.logger.log(`[11/12] quality_gate: passed=${gatePassedIds.size}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
 
-    // ── Stage 12/12: publish ──
+    // ── Stage 12/12: publish_outputs ──
     const publishedCount = await this.executePublishGate([...gatePassedIds].map((id) => ({ id })), publishThreshold);
     await this.selectForFrontPage();
     await this.ensureDigest(today);
-    this.logger.log(`[12/12] publish: published=${publishedCount} (threshold=${publishThreshold})`);
+    this.logger.log(`[12/12] publish_outputs: published=${publishedCount}, digest=ensured (threshold=${publishThreshold})`);
     this.logger.log('Pipeline completed successfully');
   }
 
@@ -640,7 +648,8 @@ export class CollectorService {
     const publishThreshold = await this.getConfig('publish_threshold', 75);
     const candidatesResult = await this.db.execute(sql`
       SELECT id, source_name, primary_direction, primary_score FROM article
-      WHERE status = 'published' AND primary_score >= ${publishThreshold} AND published_at > now() - interval '7 days'
+      WHERE status = 'published' AND primary_score >= ${publishThreshold}
+        AND coalesce(published_at, collected_at) > now() - interval '7 days'
       ORDER BY primary_score DESC
     `);
     interface CandidateRow { id: string; source_name: string; primary_direction: string | null; primary_score: number | null; }
@@ -694,7 +703,10 @@ export class CollectorService {
   // ─── Rescore Pending ──────────────────────────────────────
 
   async rescorePending(shared?: {
-    aiCount: number; perSourceCount: Map<string, number>; today: string;
+    aiCount: number;
+    perSourceCount: Map<string, number>;
+    today: string;
+    excludeIds?: Set<string>;
   }): Promise<{ rescored: number; succeeded: number; failed: number; rescoredIds: Set<string> }> {
     const today = shared?.today ?? new Date().toISOString().split('T')[0];
     const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
@@ -717,7 +729,7 @@ export class CollectorService {
       .from(article)
       .where(and(
         eq(article.aiProcessed, false),
-        sql`(${article.publishedAt} IS NULL OR ${article.publishedAt} > NOW() - INTERVAL '7 days')`,
+        sql`coalesce(${article.publishedAt}, ${article.collectedAt}) > NOW() - INTERVAL '7 days'`,
         sql`${article.sourceName} != 'arXiv cs.AI'`,
       ));
     this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);
@@ -729,6 +741,7 @@ export class CollectorService {
     let rescored = 0, succeeded = 0, failed = 0;
     const rescoredIds = new Set<string>();
     for (const art of pendingArticles) {
+      if (shared?.excludeIds?.has(art.id)) continue;
       const srcUsed = perSourceCount.get(art.sourceName) || 0;
       if (srcUsed >= aiPerSourceLimit) continue;
       if (!await this.reserveAiCall(today, aiDailyLimit)) {
@@ -842,15 +855,12 @@ export class CollectorService {
   }
 
   private async ensureDigest(today: string): Promise<void> {
-    const [existing] = await this.db.select({ id: dailyDigest.id }).from(dailyDigest).where(eq(dailyDigest.digestDate, today));
-    if (!existing) {
-      try {
-        await this.digestService.generateDigest(today);
-        this.logger.log(`Digest generated for ${today}`);
-      } catch (error: unknown) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Failed to generate digest: ${errMsg}`);
-      }
+    try {
+      await this.digestService.generateDigest(today);
+      this.logger.log(`Digest generated/refreshed for ${today}`);
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to generate digest: ${errMsg}`);
     }
   }
 

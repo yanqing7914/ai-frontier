@@ -7,8 +7,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@client/src/components/ui/select';
-import { Empty, EmptyTitle, EmptyDescription } from '@client/src/components/ui/empty';
-import { getWorkbenchArticles, getArticleScores } from '@client/src/api/article';
+import {
+  Empty,
+  EmptyTitle,
+  EmptyDescription,
+} from '@client/src/components/ui/empty';
+import {
+  getWorkbenchArticles,
+  getArticleScores,
+} from '@client/src/api/article';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
@@ -26,52 +33,119 @@ import type {
   Direction,
   ExcludeReason,
 } from '@shared/api.interface';
+import {
+  DIMENSION_FULL,
+  DIRECTIONS as DIRECTION_META,
+} from '@shared/directions';
 
-const DIRECTIONS = [
-  { key: 'model', label: '模型', bg: 'hsl(265,48%,60%)', fg: 'hsl(265,55%,28%)' },
-  { key: 'agent', label: '智能体', bg: 'hsl(220,50%,58%)', fg: 'hsl(220,60%,25%)' },
-  { key: 'multimodal', label: '多模态', bg: 'hsl(310,42%,58%)', fg: 'hsl(310,50%,28%)' },
-  { key: 'coding', label: '编程', bg: 'hsl(170,45%,48%)', fg: 'hsl(170,55%,22%)' },
-  { key: 'infrastructure', label: '基础设施', bg: 'hsl(195,50%,50%)', fg: 'hsl(195,60%,22%)' },
-  { key: 'data_eval', label: '评测数据', bg: 'hsl(45,55%,52%)', fg: 'hsl(45,65%,25%)' },
-  { key: 'safety_governance', label: '安全治理', bg: 'hsl(0,48%,58%)', fg: 'hsl(0,58%,28%)' },
-  { key: 'applications', label: '应用', bg: 'hsl(150,45%,50%)', fg: 'hsl(150,55%,22%)' },
-  { key: 'business_ecosystem', label: '商业生态', bg: 'hsl(30,50%,52%)', fg: 'hsl(30,60%,25%)' },
-] as const;
+const DIRECTIONS = DIRECTION_META.map(({ id, label, bg, fg }) => ({
+  key: id,
+  label,
+  bg,
+  fg,
+}));
+
+const LEGACY_DIMENSIONS = new Set([
+  'novelty',
+  'depth',
+  'impact',
+  'authority',
+  'timeliness',
+]);
 
 const DIMENSION_LABELS: Record<string, string> = {
-  novelty: '新颖度', depth: '深度', impact: '影响力', authority: '权威性', timeliness: '时效性',
-  entity: '实体识别', capability: '能力变化', availability: '可用性', performance: '性能质量',
-  cost: '成本效率', ecosystem: '生态兼容', adoption: '采用影响',
-  task_boundary: '任务边界', tool_call: '工具调用', protocol: '协议生态',
-  orchestration: '多步编排', observability: '可观测性', production: '生产控制',
-  benchmark: '评测效果', workflow: '企业工作流',
-  modality_coverage: '模态覆盖', io_capability: '输入输出', quality: '生成质量',
-  realtime: '实时交互', editing: '编辑控制', '3d_world': '3D/世界模型',
-  safety_copyright: '安全版权', product: '产品落地',
-  code_gen: '代码生成', repo_understanding: '仓库理解', engineering: '工程执行',
-  ide_integration: 'IDE集成', delivery: '交付质量', cost_speed: '成本速度', security: '安全权限',
-  hardware: '算力硬件', training: '训练能力', software_stack: '软件栈',
-  cloud: '云/数据中心', edge: '端侧', ops: '稳定运维',
-  data_asset: '数据资产', coverage: '覆盖范围', methodology: '方法指标',
-  reproducibility: '可复现性', governance: '许可治理', decision_value: '决策价值',
-  risk_type: '风险类型', controls: '控制措施', verification: '风险验证',
-  privacy: '隐私保护', copyright: '版权问题', regulation: '法规政策',
-  framework: '治理框架', deployment_impact: '部署影响',
-  industry: '行业用户', business_problem: '业务问题', launch_status: '上线状态',
-  scale: '使用规模', roi: '效果/ROI', workflow_change: '工作流改造',
-  replicability: '可复制性', risk_responsibility: '风险责任',
-  business_fact: '商业事实', entity_market: '市场位置', strategy: '战略变化',
-  business_model: '商业模式', market_landscape: '市场格局',
-  open_source: '开源社区', talent: '人才组织', signal: '商业信号',
+  novelty: '新颖度',
+  depth: '深度',
+  impact: '影响力',
+  authority: '权威性',
+  timeliness: '时效性',
+  entity: '实体识别',
+  capability: '能力变化',
+  availability: '可用性',
+  performance: '性能质量',
+  cost: '成本效率',
+  ecosystem: '生态兼容',
+  adoption: '采用影响',
+  task_boundary: '任务边界',
+  tool_call: '工具调用',
+  protocol: '协议生态',
+  orchestration: '多步编排',
+  observability: '可观测性',
+  production: '生产控制',
+  benchmark: '评测效果',
+  workflow: '企业工作流',
+  modality_coverage: '模态覆盖',
+  io_capability: '输入输出',
+  quality: '生成质量',
+  realtime: '实时交互',
+  editing: '编辑控制',
+  '3d_world': '3D/世界模型',
+  safety_copyright: '安全版权',
+  product: '产品落地',
+  code_gen: '代码生成',
+  repo_understanding: '仓库理解',
+  engineering: '工程执行',
+  ide_integration: 'IDE集成',
+  delivery: '交付质量',
+  cost_speed: '成本速度',
+  security: '安全权限',
+  hardware: '算力硬件',
+  training: '训练能力',
+  software_stack: '软件栈',
+  cloud: '云/数据中心',
+  edge: '端侧',
+  ops: '稳定运维',
+  data_asset: '数据资产',
+  coverage: '覆盖范围',
+  methodology: '方法指标',
+  reproducibility: '可复现性',
+  governance: '许可治理',
+  decision_value: '决策价值',
+  risk_type: '风险类型',
+  controls: '控制措施',
+  verification: '风险验证',
+  privacy: '隐私保护',
+  copyright: '版权问题',
+  regulation: '法规政策',
+  framework: '治理框架',
+  deployment_impact: '部署影响',
+  industry: '行业用户',
+  business_problem: '业务问题',
+  launch_status: '上线状态',
+  scale: '使用规模',
+  roi: '效果/ROI',
+  workflow_change: '工作流改造',
+  replicability: '可复制性',
+  risk_responsibility: '风险责任',
+  business_fact: '商业事实',
+  entity_market: '市场位置',
+  strategy: '战略变化',
+  business_model: '商业模式',
+  market_landscape: '市场格局',
+  open_source: '开源社区',
+  talent: '人才组织',
+  signal: '商业信号',
 };
 
-const STATUS_MAP: Record<ArticleStatus, { label: string; className: string }> = {
-  published: { label: '已发布', className: 'bg-[hsl(150_60%_40%)] text-white border-transparent' },
-  draft: { label: '草稿', className: 'bg-muted text-muted-foreground border-transparent' },
-  blocked: { label: '已拦截', className: 'bg-[hsl(5_70%_50%)] text-white border-transparent' },
-  pending_review: { label: '待审核', className: 'bg-[hsl(35_85%_55%)] text-white border-transparent' },
-};
+const STATUS_MAP: Record<ArticleStatus, { label: string; className: string }> =
+  {
+    published: {
+      label: '已发布',
+      className: 'bg-[hsl(150_60%_40%)] text-white border-transparent',
+    },
+    draft: {
+      label: '草稿',
+      className: 'bg-muted text-muted-foreground border-transparent',
+    },
+    blocked: {
+      label: '已拦截',
+      className: 'bg-[hsl(5_70%_50%)] text-white border-transparent',
+    },
+    pending_review: {
+      label: '待审核',
+      className: 'bg-[hsl(35_85%_55%)] text-white border-transparent',
+    },
+  };
 
 const EXCLUDE_REASON_MAP: Record<ExcludeReason, string> = {
   source_cap: '源配额满',
@@ -161,11 +235,20 @@ function ScorePanel({ articleId }: ScorePanelProps) {
                     <div className="flex-1 h-1.5 bg-accent rounded-full overflow-hidden">
                       <div
                         className="h-full bg-primary rounded-full"
-                        style={{ width: `${(value / 20) * 100}%` }}
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (value /
+                              (LEGACY_DIMENSIONS.has(key)
+                                ? 20
+                                : DIMENSION_FULL)) *
+                              100,
+                          )}%`,
+                        }}
                       />
                     </div>
                   </div>
-                )
+                ),
               )}
             </div>
           </div>
@@ -188,7 +271,9 @@ const WorkbenchScoreTab = () => {
     if (dirFilter !== 'all') params.direction = dirFilter;
     if (statusFilter !== 'all') params.status = statusFilter;
     getWorkbenchArticles(params)
-      .then((data: { items: WorkbenchArticleItem[] }) => setArticles(data.items))
+      .then((data: { items: WorkbenchArticleItem[] }) =>
+        setArticles(data.items),
+      )
       .catch((err: unknown) => {
         logger.error(`Failed to load articles: ${String(err)}`);
         toast.error('加载文章列表失败');
@@ -207,7 +292,10 @@ const WorkbenchScoreTab = () => {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <Select value={dirFilter} onValueChange={(v: string) => setDirFilter(v)}>
+        <Select
+          value={dirFilter}
+          onValueChange={(v: string) => setDirFilter(v)}
+        >
           <SelectTrigger>
             <SelectValue placeholder="方向" />
           </SelectTrigger>
@@ -220,7 +308,10 @@ const WorkbenchScoreTab = () => {
             ))}
           </SelectContent>
         </Select>
-        <Select value={statusFilter} onValueChange={(v: string) => setStatusFilter(v)}>
+        <Select
+          value={statusFilter}
+          onValueChange={(v: string) => setStatusFilter(v)}
+        >
           <SelectTrigger>
             <SelectValue placeholder="状态" />
           </SelectTrigger>
@@ -249,13 +340,27 @@ const WorkbenchScoreTab = () => {
             <thead>
               <tr className="border-b border-border bg-accent/30">
                 <th className="text-left py-3 px-4 font-medium text-muted-foreground w-8" />
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">标题</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">主方向</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">总分</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">状态</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">首页</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">AI</th>
-                <th className="text-left py-3 px-4 font-medium text-muted-foreground">采集时间</th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  标题
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  主方向
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  总分
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  状态
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  首页
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  AI
+                </th>
+                <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                  采集时间
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -302,21 +407,32 @@ const WorkbenchScoreTab = () => {
                         </Badge>
                       </td>
                       <td className="py-3 px-4">
-                        {article.status === 'published' && !article.excludeReason ? (
-                          <Badge className="bg-[hsl(220_75%_45%)] text-white border-transparent text-[10px]">首页</Badge>
+                        {article.status === 'published' &&
+                        !article.excludeReason ? (
+                          <Badge className="bg-[hsl(220_75%_45%)] text-white border-transparent text-[10px]">
+                            首页
+                          </Badge>
                         ) : article.excludeReason ? (
-                          <Badge variant="outline" className="text-[10px] border-[hsl(35_85%_45%)] text-[hsl(35_85%_45%)]">
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] border-[hsl(35_85%_45%)] text-[hsl(35_85%_45%)]"
+                          >
                             {EXCLUDE_REASON_MAP[article.excludeReason]}
                           </Badge>
                         ) : (
-                          <span className="text-muted-foreground text-xs">-</span>
+                          <span className="text-muted-foreground text-xs">
+                            -
+                          </span>
                         )}
                       </td>
                       <td className="py-3 px-4">
                         {article.aiProcessed ? (
                           <Badge variant="default">AI 精选</Badge>
                         ) : !article.aiDegradeReason ? (
-                          <Badge variant="outline" className="border-muted-foreground/40 text-muted-foreground">
+                          <Badge
+                            variant="outline"
+                            className="border-muted-foreground/40 text-muted-foreground"
+                          >
                             规则评分
                           </Badge>
                         ) : (

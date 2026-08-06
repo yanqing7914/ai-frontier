@@ -17,7 +17,7 @@ export interface AiArticleScoringOneInput {
 export interface AiArticleScoringOneOutput {
   /** 文章核心摘要，准确概括文章主要内容、核心观点和关键信息 */
   summary: string;
-  /** 8个方向的多维评分结果，schema: {"agent": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "model": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "coding": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "multi": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "eval": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "infra": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "data": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}, "security": {"novelty": number, "depth": number, "impact": number, "authority": number, "timeliness": number}} */
+  /** 9个前台方向的专属维度评分结果，每个维度为0、2.5或5附近的0-5数值。 */
   scores: Record<string, unknown>;
 }
 // ---- end:ai_article_scoring_1 ----

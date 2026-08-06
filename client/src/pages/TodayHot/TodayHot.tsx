@@ -8,7 +8,13 @@ import {
   EmptyDescription,
   EmptyMedia,
 } from '@/components/ui/empty';
-import { Flame, Calendar, ExternalLink, FileText, RefreshCw } from 'lucide-react';
+import {
+  Flame,
+  Calendar,
+  ExternalLink,
+  FileText,
+  RefreshCw,
+} from 'lucide-react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
@@ -17,22 +23,18 @@ import { logger } from '@lark-apaas/client-toolkit/logger';
 import { getHotArticles } from '@/api/article';
 import { DigestDialog } from './TodayHotDigestDialog';
 import type { HotArticleItem, Direction } from '@shared/api.interface';
+import { DIRECTIONS as DIRECTION_META } from '@shared/directions';
 import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
 
 dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');
 
-const DIRECTIONS = [
-  { key: 'model', label: '模型', bg: 'hsl(265,48%,60%)', fg: 'hsl(265,55%,28%)' },
-  { key: 'agent', label: '智能体', bg: 'hsl(220,50%,58%)', fg: 'hsl(220,60%,25%)' },
-  { key: 'multimodal', label: '多模态', bg: 'hsl(310,42%,58%)', fg: 'hsl(310,50%,28%)' },
-  { key: 'coding', label: '编程', bg: 'hsl(170,45%,48%)', fg: 'hsl(170,55%,22%)' },
-  { key: 'infrastructure', label: '基础设施', bg: 'hsl(195,50%,50%)', fg: 'hsl(195,60%,22%)' },
-  { key: 'data_eval', label: '评测数据', bg: 'hsl(45,55%,52%)', fg: 'hsl(45,65%,25%)' },
-  { key: 'safety_governance', label: '安全治理', bg: 'hsl(0,48%,58%)', fg: 'hsl(0,58%,28%)' },
-  { key: 'applications', label: '应用', bg: 'hsl(150,45%,50%)', fg: 'hsl(150,55%,22%)' },
-  { key: 'business_ecosystem', label: '商业生态', bg: 'hsl(30,50%,52%)', fg: 'hsl(30,60%,25%)' },
-] as const;
+const DIRECTIONS = DIRECTION_META.map(({ id, label, bg, fg }) => ({
+  key: id,
+  label,
+  bg,
+  fg,
+}));
 
 const TodayHot = () => {
   const [articles, setArticles] = useState<HotArticleItem[]>([]);
@@ -78,9 +80,12 @@ const TodayHot = () => {
     });
   }, []);
 
-  const filtered = selected.size === 0 || selected.size === DIRECTIONS.length
-    ? articles
-    : articles.filter((a: HotArticleItem) => selected.has(a.primaryDirection));
+  const filtered =
+    selected.size === 0 || selected.size === DIRECTIONS.length
+      ? articles
+      : articles.filter((a: HotArticleItem) =>
+          selected.has(a.primaryDirection),
+        );
 
   const directionOf = useCallback(
     (dir: Direction) => DIRECTIONS.find((d) => d.key === dir),
@@ -88,7 +93,10 @@ const TodayHot = () => {
   );
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: 'hsl(220,20%,97%)' }}>
+    <div
+      className="min-h-screen"
+      style={{ backgroundColor: 'hsl(220,20%,97%)' }}
+    >
       <div className="max-w-4xl mx-auto px-4 py-6">
         {/* Status Bar */}
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -126,8 +134,16 @@ const TodayHot = () => {
                 className="shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors border"
                 style={
                   isSelected
-                    ? { backgroundColor: dir.bg, color: dir.fg, borderColor: dir.bg }
-                    : { backgroundColor: 'transparent', color: 'hsl(220,12%,50%)', borderColor: 'hsl(220,15%,88%)' }
+                    ? {
+                        backgroundColor: dir.bg,
+                        color: dir.fg,
+                        borderColor: dir.bg,
+                      }
+                    : {
+                        backgroundColor: 'transparent',
+                        color: 'hsl(220,12%,50%)',
+                        borderColor: 'hsl(220,15%,88%)',
+                      }
                 }
               >
                 {dir.label}
@@ -205,7 +221,10 @@ const TodayHot = () => {
                         {article.sourceName}
                       </span>
                       {article.clusterCount > 1 && (
-                        <Badge variant="outline" className="rounded-full text-[10px] px-1.5 py-0">
+                        <Badge
+                          variant="outline"
+                          className="rounded-full text-[10px] px-1.5 py-0"
+                        >
                           {article.clusterCount} 家报道
                         </Badge>
                       )}

@@ -63,7 +63,7 @@ export class ArticleService {
 
     const baseConditions = [
       eq(article.status, 'published'),
-      gte(article.publishedAt, sql`now() - interval '7 days'`),
+      sql`coalesce(${article.publishedAt}, ${article.collectedAt}) >= now() - interval '7 days'`,
       gte(article.primaryScore, 75),
     ];
     if (normalizedDirections && normalizedDirections.length > 0) {
@@ -135,7 +135,7 @@ export class ArticleService {
           })
           .from(article)
           .where(supplementWhere)
-          .orderBy(desc(article.primaryScore), desc(article.publishedAt))
+          .orderBy(desc(article.primaryScore), desc(sql`coalesce(${article.publishedAt}, ${article.collectedAt})`))
           .limit(remaining);
         pageItems.push(...supplementPage);
       }
@@ -157,7 +157,7 @@ export class ArticleService {
         })
         .from(article)
         .where(supplementWhere)
-        .orderBy(desc(article.primaryScore), desc(article.publishedAt))
+        .orderBy(desc(article.primaryScore), desc(sql`coalesce(${article.publishedAt}, ${article.collectedAt})`))
         .limit(pageSize)
         .offset(supplementOffset);
       pageItems.push(...supplementPage);

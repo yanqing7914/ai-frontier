@@ -44,13 +44,13 @@ describe('PIPELINE_STAGE_ORDER (production export)', () => {
     expect(unique.size).toBe(PIPELINE_STAGE_ORDER.length);
   });
 
-  it('starts with source_snapshot and ends with publish', () => {
-    expect(PIPELINE_STAGE_ORDER[0]).toBe('source_snapshot');
-    expect(PIPELINE_STAGE_ORDER[PIPELINE_STAGE_ORDER.length - 1]).toBe('publish');
+  it('starts with source_ingest and ends with publish_outputs', () => {
+    expect(PIPELINE_STAGE_ORDER[0]).toBe('source_ingest');
+    expect(PIPELINE_STAGE_ORDER[PIPELINE_STAGE_ORDER.length - 1]).toBe('publish_outputs');
   });
 
-  it('fetch < parse (separate observable stages)', () => {
-    expect(PIPELINE_STAGE_ORDER.indexOf('fetch')).toBeLessThan(PIPELINE_STAGE_ORDER.indexOf('parse'));
+  it('scheduled_fetch < parse (separate observable stages)', () => {
+    expect(PIPELINE_STAGE_ORDER.indexOf('scheduled_fetch')).toBeLessThan(PIPELINE_STAGE_ORDER.indexOf('parse'));
   });
 
   it('classify < cluster < rule_score', () => {
@@ -61,7 +61,7 @@ describe('PIPELINE_STAGE_ORDER (production export)', () => {
     expect(cl).toBeLessThan(r);
   });
 
-  it('trace < classify < cluster < rule_score < ai_score < quality_gate < publish', () => {
+  it('trace < classify < cluster < rule_score < ai_score < quality_gate < publish_outputs', () => {
     const order = [...PIPELINE_STAGE_ORDER];
     const idx = (s: string) => order.indexOf(s as typeof order[number]);
     expect(idx('trace')).toBeLessThan(idx('classify'));
@@ -69,14 +69,14 @@ describe('PIPELINE_STAGE_ORDER (production export)', () => {
     expect(idx('cluster')).toBeLessThan(idx('rule_score'));
     expect(idx('rule_score')).toBeLessThan(idx('ai_score'));
     expect(idx('ai_score')).toBeLessThan(idx('quality_gate'));
-    expect(idx('quality_gate')).toBeLessThan(idx('publish'));
+    expect(idx('quality_gate')).toBeLessThan(idx('publish_outputs'));
   });
 
   it('exact order matches specification', () => {
     expect([...PIPELINE_STAGE_ORDER]).toEqual([
-      'source_snapshot', 'fetch', 'parse', 'normalize',
+      'source_ingest', 'scheduled_fetch', 'parse', 'normalize',
       'url_dedup', 'trace', 'classify', 'cluster',
-      'rule_score', 'ai_score', 'quality_gate', 'publish',
+      'rule_score', 'ai_score', 'quality_gate', 'publish_outputs',
     ]);
   });
 });
