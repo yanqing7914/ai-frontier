@@ -877,13 +877,30 @@ export class CollectorService {
         originStatus: article.originStatus,
       })
       .from(article).where(inArray(article.id, articleIds));
-    const primaryDirScores = await this.db.execute(sql`
-      SELECT ds.article_id, ds.dimension_scores FROM direction_score ds
-      JOIN article a ON ds.article_id = a.id AND ds.direction = a.primary_direction
-      WHERE ds.article_id = ANY(${sql.join(articleIds.map((id) => sql`${id}`), sql`, `)}::uuid[])
-    `) as unknown as { article_id: string; dimension_scores: Record<string, number> }[];
+    // Built with the query builder on purpose: the hand-written variant expanded the
+    // id list into `ANY($1, $2, ...::uuid[])`, which is not valid Postgres and made the
+    // publish gate throw on every run with more than one article.
+    const primaryDirScores = await this.db
+      .select({
+        articleId: directionScore.articleId,
+        dimensionScores: directionScore.dimensionScores,
+      })
+      .from(directionScore)
+      .innerJoin(
+        article,
+        and(
+          eq(directionScore.articleId, article.id),
+          eq(directionScore.direction, article.primaryDirection),
+        ),
+      )
+      .where(inArray(directionScore.articleId, articleIds));
     const scoreMap = new Map<string, Record<string, number>>();
-    for (const row of primaryDirScores) scoreMap.set(row.article_id, row.dimension_scores ?? {});
+    for (const row of primaryDirScores) {
+      scoreMap.set(
+        row.articleId,
+        (row.dimensionScores as Record<string, number> | null) ?? {},
+      );
+    }
     let publishedCount = 0;
     for (const art of allArticles) {
       const passes = canPublishArticle({
