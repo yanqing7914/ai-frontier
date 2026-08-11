@@ -21,7 +21,10 @@ print_time() {
 # ==================== 步骤 0 ====================
 echo "🗑️  [0/6] 安装插件"
 STEP_START=$(node -e "console.log(Date.now())")
-npx fullstack-cli action-plugin init
+# Must stay fully qualified: bare `npx fullstack-cli` resolves to an unrelated
+# third-party package on the public npm registry (observed: fullstack-cli@1.2.4),
+# which npx then downloads and executes during the build. Matches postinstall.
+npx -y @lark-apaas/fullstack-cli@latest action-plugin init
 print_time $STEP_START
 echo ""
 

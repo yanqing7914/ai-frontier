@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -137,6 +137,7 @@ function SourceManage() {
   const [loading, setLoading] = useState(false);
   const [tierFilter, setTierFilter] = useState<string>('all');
   const [enabledFilter, setEnabledFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<FeedSourceListItem | null>(
     null,
@@ -291,13 +292,51 @@ function SourceManage() {
     }
   };
 
-  const formatSuccessRate = (rate: number): string => `${rate.toFixed(0)}%`;
-  const rateColor = (rate: number): string =>
+  const formatSuccessRate = (rate: number): string => `${rate.toFixed(0)}%`;  const rateColor = (rate: number): string =>
     rate >= 80
       ? 'text-[hsl(150_60%_40%)]'
       : rate >= 50
         ? 'text-[hsl(35_85%_55%)]'
         : 'text-[hsl(5_70%_50%)]';
+
+  const UNCATEGORIZED = '__uncategorized__';
+
+  // The 8 source categories were only ever a label on the edit form; the list was
+  // a flat table. Group and filter by them here so the pool is actually navigable.
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const source of sources) {
+      const key = source.sourceCategoryId ?? UNCATEGORIZED;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }, [sources]);
+
+  const groupedSources = useMemo(() => {
+    const buckets = new Map<string, FeedSourceListItem[]>();
+    for (const source of sources) {
+      const key = source.sourceCategoryId ?? UNCATEGORIZED;
+      if (categoryFilter !== 'all' && key !== categoryFilter) continue;
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(source);
+      else buckets.set(key, [source]);
+    }
+    const ordered: Array<{ id: string; label: string; items: FeedSourceListItem[] }> = [];
+    for (const option of SOURCE_CATEGORY_OPTIONS) {
+      const items = buckets.get(option.id);
+      if (items?.length) ordered.push({ id: option.id, label: option.label, items });
+    }
+    const rest = buckets.get(UNCATEGORIZED);
+    if (rest?.length) {
+      ordered.push({ id: UNCATEGORIZED, label: '未分类', items: rest });
+    }
+    return ordered;
+  }, [sources, categoryFilter]);
+
+  const visibleCount = groupedSources.reduce(
+    (sum, group) => sum + group.items.length,
+    0,
+  );
 
   return (
     <div className="space-y-4">
@@ -307,6 +346,24 @@ function SourceManage() {
           新增信息源
         </Button>
         <div className="flex items-center gap-2">
+          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="分类筛选" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部分类（{sources.length}）</SelectItem>
+              {SOURCE_CATEGORY_OPTIONS.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.label}（{categoryCounts[option.id] ?? 0}）
+                </SelectItem>
+              ))}
+              {categoryCounts[UNCATEGORIZED] ? (
+                <SelectItem value={UNCATEGORIZED}>
+                  未分类（{categoryCounts[UNCATEGORIZED]}）
+                </SelectItem>
+              ) : null}
+            </SelectContent>
+          </Select>
           <Select value={tierFilter} onValueChange={setTierFilter}>
             <SelectTrigger className="w-[140px]">
               <SelectValue placeholder="层级筛选" />
@@ -333,7 +390,7 @@ function SourceManage() {
 
       {loading ? (
         <div className="py-12 text-center text-muted-foreground">加载中...</div>
-      ) : sources.length === 0 ? (
+      ) : visibleCount === 0 ? (
         <Empty className="py-12">
           <EmptyHeader>
             <EmptyTitle>暂无信息源</EmptyTitle>
@@ -375,7 +432,17 @@ function SourceManage() {
               </tr>
             </thead>
             <tbody>
-              {sources.map((source) => {
+              {groupedSources.map((group) => (
+                <Fragment key={group.id}>
+                  <tr className="border-b border-border bg-muted/50">
+                    <td
+                      colSpan={9}
+                      className="py-2 px-4 text-xs font-medium text-muted-foreground"
+                    >
+                      {group.label}（{group.items.length}）
+                    </td>
+                  </tr>
+                  {group.items.map((source) => {
                 const tierConf = TIER_CONFIG[source.tier];
                 const isExpanded = expandedId === source.id;
                 const health = healthData[source.id];
@@ -524,10 +591,15 @@ function SourceManage() {
                   </Fragment>
                 );
               })}
+                </Fragment>
+              ))}
             </tbody>
           </table>
           <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border">
             共 {total} 个信息源
+            {categoryFilter === 'all'
+              ? null
+              : `，当前分类 ${visibleCount} 个`}
           </div>
         </div>
       )}
