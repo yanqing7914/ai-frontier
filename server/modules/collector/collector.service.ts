@@ -30,6 +30,7 @@ export type PipelineStage = typeof PIPELINE_STAGE_ORDER[number];
 
 const STALE_DAYS = 7;
 const CLUSTER_THRESHOLD = 0.5;
+export const PIPELINE_RUN_STATE_KEY = 'pipeline_run_state';
 
 interface PipelineArticle { id: string; title: string; url: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; sourceName: string; sourceCategoryId: string | null; originPolicy: 'first_party' | 'editorial' | 'aggregator'; }
 interface RawFetchResponse { feedSourceId: string; feedType: string; url: string; sourceName: string; sourceTier: string; sourceCategoryId: string | null; originPolicy: string | null; rawContent: string; byteLength: number; httpStatus: number; }
@@ -57,6 +58,81 @@ export class CollectorService {
     private readonly digestService: DigestService,
     private readonly aiScoringService: AiScoringService,
   ) {}
+
+  /**
+   * Fast-ack entry point for the scheduler.
+   *
+   * The platform's dispatch phase hard-fails at ~10s (observed duration_ms 10001),
+   * while a full run legitimately takes ~10 minutes — a single AI scoring call alone
+   * has been measured at 13.2s. The runtime is NOT killed at the ack deadline
+   * (a run was observed continuing for 596s past it), so we acknowledge the trigger
+   * immediately and let the pipeline finish detached, recording the real outcome in
+   * `pipeline_run_state` instead of hiding it behind a timed-out dispatch record.
+   */
+  async startPipelineDetached(
+    trigger: string,
+  ): Promise<{ accepted: boolean; reason?: string }> {
+    if (this.pipelineRunning) {
+      this.logger.warn(`Pipeline run rejected (${trigger}): a run is already in progress`);
+      return { accepted: false, reason: 'a pipeline run is already in progress' };
+    }
+
+    const startedAt = new Date().toISOString();
+    await this.writeRunState({ status: 'running', trigger, startedAt });
+
+    // `runPipeline` flips `pipelineRunning` synchronously before its first await,
+    // so this cannot double-start even without awaiting.
+    void this.runPipeline().then(
+      async () => {
+        await this.writeRunState({
+          status: 'succeeded', trigger, startedAt,
+          finishedAt: new Date().toISOString(),
+        });
+      },
+      async (error: unknown) => {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Detached pipeline run FAILED (${trigger}): ${errMsg}`);
+        if (error instanceof Error && error.stack) this.logger.error(`Stack: ${error.stack}`);
+        await this.writeRunState({
+          status: 'failed', trigger, startedAt,
+          finishedAt: new Date().toISOString(), error: errMsg,
+        }).catch((stateErr: unknown) => {
+          this.logger.error(
+            `Failed to persist pipeline failure state: ${stateErr instanceof Error ? stateErr.message : String(stateErr)}`,
+          );
+        });
+      },
+    );
+
+    this.logger.log(`Pipeline run accepted (${trigger}); executing detached`);
+    return { accepted: true };
+  }
+
+  /** Persist the outcome of the most recent run so a detached failure is never invisible. */
+  private async writeRunState(state: {
+    status: 'running' | 'succeeded' | 'failed';
+    trigger: string;
+    startedAt: string;
+    finishedAt?: string;
+    error?: string;
+  }): Promise<void> {
+    await this.db
+      .insert(appConfig)
+      .values({
+        key: PIPELINE_RUN_STATE_KEY,
+        value: state,
+        description: 'Outcome of the most recent collector pipeline run',
+      })
+      .onConflictDoUpdate({ target: appConfig.key, set: { value: state } });
+  }
+
+  async getRunState(): Promise<Record<string, unknown> | null> {
+    const [row] = await this.db
+      .select()
+      .from(appConfig)
+      .where(eq(appConfig.key, PIPELINE_RUN_STATE_KEY));
+    return (row?.value as Record<string, unknown> | undefined) ?? null;
+  }
 
   async runPipeline(): Promise<void> {
     if (this.pipelineRunning) { this.logger.log('Pipeline already running, skipping'); return; }
