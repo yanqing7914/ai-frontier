@@ -56,6 +56,7 @@ export class ArticleService {
   }): Promise<PaginatedResponse<HotArticleItem>> {
     const { page, pageSize, directions } = params;
     const offset = (page - 1) * pageSize;
+    const publishThreshold = await this.getPublishThreshold();
 
     const normalizedDirections = directions && directions.length > 0
       ? directions.map((d: string) => normalizeDirection(d)).filter((d): d is Direction => d !== null)
@@ -64,7 +65,7 @@ export class ArticleService {
     const baseConditions = [
       eq(article.status, 'published'),
       sql`coalesce(${article.publishedAt}, ${article.collectedAt}) >= now() - interval '7 days'`,
-      gte(article.primaryScore, 75),
+      gte(article.primaryScore, publishThreshold),
     ];
     if (normalizedDirections && normalizedDirections.length > 0) {
       baseConditions.push(inArray(article.primaryDirection, normalizedDirections));
@@ -207,6 +208,17 @@ export class ArticleService {
     }));
 
     return { items, total };
+  }
+
+  /** Keep the read API in sync with the configurable collector publication gate. */
+  private async getPublishThreshold(): Promise<number> {
+    const [config] = await this.db
+      .select({ value: appConfig.value })
+      .from(appConfig)
+      .where(eq(appConfig.key, 'publish_threshold'));
+    const raw = config?.value;
+    const parsed = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 75;
   }
 
   async getWorkbenchOverview(): Promise<WorkbenchOverview> {
