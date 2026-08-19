@@ -13,6 +13,16 @@ export interface DirectionMeta {
   dimensions: string[];
 }
 
+export interface DirectionScoringPolicy {
+  weights: Record<string, number>;
+  coreDimensions: string[];
+  /** Number of core dimensions that must have direct evidence for eligibility. */
+  minCoreEvidence: number;
+  /** Number of non-zero dimensions needed to avoid a keyword-only score. */
+  minEvidenceDimensions: number;
+  maxWithoutCoreEvidence: number;
+}
+
 export const DIRECTIONS: DirectionMeta[] = [
   {
     id: 'model', label: '模型', name: 'Model', sortOrder: 1,
@@ -62,6 +72,50 @@ export const DIRECTIONS: DirectionMeta[] = [
 ];
 
 export const ALL_DIRECTION_IDS: Direction[] = DIRECTIONS.map((d) => d.id);
+
+/** Direction-specific scorecards keep the nine editorial directions distinct. */
+export const DIRECTION_SCORING_POLICIES: Record<Direction, DirectionScoringPolicy> = {
+  model: {
+    weights: { entity: 1.5, capability: 2, availability: 1, performance: 1.5, cost: 1, ecosystem: 1, adoption: 1 },
+    coreDimensions: ['entity', 'capability'], minCoreEvidence: 2, minEvidenceDimensions: 3, maxWithoutCoreEvidence: 12,
+  },
+  agent: {
+    weights: { task_boundary: 1.5, tool_call: 1.5, protocol: 1, orchestration: 1.5, observability: 0.75, production: 1.5, benchmark: 0.75, workflow: 1.5 },
+    coreDimensions: ['task_boundary', 'tool_call', 'orchestration'], minCoreEvidence: 2, minEvidenceDimensions: 3, maxWithoutCoreEvidence: 12,
+  },
+  multimodal: {
+    weights: { modality_coverage: 1.5, io_capability: 1.5, quality: 1, realtime: 1, editing: 0.75, '3d_world': 1, safety_copyright: 0.75, product: 1 },
+    coreDimensions: ['modality_coverage', 'io_capability'], minCoreEvidence: 2, minEvidenceDimensions: 2, maxWithoutCoreEvidence: 12,
+  },
+  coding: {
+    weights: { code_gen: 1.5, repo_understanding: 1.25, engineering: 1.5, ide_integration: 1, delivery: 1, benchmark: 0.75, cost_speed: 0.75, security: 0.75 },
+    coreDimensions: ['code_gen', 'engineering', 'repo_understanding'], minCoreEvidence: 2, minEvidenceDimensions: 3, maxWithoutCoreEvidence: 12,
+  },
+  infrastructure: {
+    weights: { hardware: 1.5, training: 1, performance: 1.5, cost: 1, software_stack: 1.25, cloud: 1.25, edge: 0.75, ops: 0.75 },
+    coreDimensions: ['hardware', 'performance', 'software_stack'], minCoreEvidence: 2, minEvidenceDimensions: 2, maxWithoutCoreEvidence: 12,
+  },
+  data_eval: {
+    weights: { data_asset: 1.5, coverage: 1, methodology: 1.5, reproducibility: 1.25, performance: 1.25, quality: 1, governance: 1, decision_value: 0.75 },
+    coreDimensions: ['data_asset', 'methodology', 'performance'], minCoreEvidence: 2, minEvidenceDimensions: 3, maxWithoutCoreEvidence: 10,
+  },
+  safety_governance: {
+    weights: { risk_type: 1.25, controls: 1.5, verification: 1.5, privacy: 1, copyright: 1, regulation: 1.25, framework: 1.25, deployment_impact: 1 },
+    coreDimensions: ['risk_type', 'controls', 'verification', 'regulation'], minCoreEvidence: 2, minEvidenceDimensions: 2, maxWithoutCoreEvidence: 10,
+  },
+  applications: {
+    weights: { industry: 1.25, business_problem: 1.5, launch_status: 1.5, scale: 1, roi: 1.25, workflow_change: 1.25, replicability: 0.75, risk_responsibility: 1 },
+    coreDimensions: ['industry', 'business_problem', 'launch_status'], minCoreEvidence: 2, minEvidenceDimensions: 3, maxWithoutCoreEvidence: 10,
+  },
+  business_ecosystem: {
+    weights: { business_fact: 1.5, entity_market: 1.25, strategy: 1.25, business_model: 1.5, market_landscape: 1.25, open_source: 0.75, talent: 0.75, signal: 1 },
+    coreDimensions: ['business_fact', 'entity_market', 'strategy', 'business_model'], minCoreEvidence: 2, minEvidenceDimensions: 2, maxWithoutCoreEvidence: 10,
+  },
+};
+
+export function getDirectionScoringPolicy(id: Direction): DirectionScoringPolicy {
+  return DIRECTION_SCORING_POLICIES[id];
+}
 
 export const LEGACY_DIRECTION_MAP: Record<string, Direction> = {
   multi: 'multimodal',

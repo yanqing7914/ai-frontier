@@ -9,9 +9,9 @@ import {
   ALL_DIRECTION_IDS,
   LEGACY_DIRECTION_MAP,
   MAX_DIRECTION_SCORE,
-  FACT_THRESHOLD,
   DIMENSION_FULL,
   DIMENSION_HALF,
+  getDirectionScoringPolicy,
   type Direction,
   type DirectionMeta,
 } from '@shared/directions';
@@ -51,6 +51,14 @@ export interface DirectionEvidence {
   dimensionScores: DimensionScores;
 }
 
+interface GenericQualityScore {
+  sourceCredibility: number;
+  verifiability: number;
+  completeness: number;
+  impactSignal: number;
+  total: number;
+}
+
 export interface ArticleScoringResult {
   summary: string;
   directionScores: Record<Direction, DirectionEvidence>;
@@ -72,16 +80,6 @@ const SOURCE_TIER_POINTS: Record<string, number> = {
   signal: 10,
   medium: 10,
   low: 3,
-};
-
-const SOURCE_TIER_AUTHORITY: Record<string, number> = {
-  authoritative: 5,
-  top: 5,
-  validation: 4,
-  high: 4,
-  signal: 2.5,
-  medium: 2.5,
-  low: 1,
 };
 
 const NUMBER_RE = /\d[\d,.]*%|\$[\d,.]+[BMKbmk]?|\d{2,}/;
@@ -136,7 +134,6 @@ function buildDirectionPatterns(): Record<
       entity: mk(
         [
           /(?:gpt|claude|gemini|llama|qwen|deepseek|mistral|phi|gemma)[-_ ]?\d/i,
-          orgRe,
           versionRe,
         ],
         [
@@ -549,6 +546,7 @@ function buildDirectionPatterns(): Record<
       launch_status: mk(
         [
           /(?:launch|release|live|production|ga|shipping|available).{0,10}(?:now|today|version)/i,
+          /(?:production[- ]ready|deployed|deployment|上线|量产)/i,
           /(?:pilot|beta|preview|early.access).{0,10}(?:start|begin|open)/i,
         ],
         ['launch', 'production', 'live', '上线', '发布'],
@@ -738,8 +736,8 @@ export class AiScoringService {
 
     const { primaryDirection, primaryScore } =
       this.identifyPrimary(directionScores);
-    const genericScore = this.computeGenericScore(text, sourceTier);
-    const publishScore = Math.min(100, primaryScore + genericScore);
+    const qualityScore = this.computeGenericQualityScore(text, sourceTier);
+    const publishScore = this.computePublishScore(primaryScore, qualityScore);
     const summary = this.generateRuleSummary(title, content);
 
     const coreEvidencePassed =
@@ -848,8 +846,8 @@ export class AiScoringService {
 
     const { primaryDirection, primaryScore } =
       this.identifyPrimary(directionScores);
-    const genericScore = this.computeGenericScore(text, sourceTier);
-    const publishScore = Math.min(100, primaryScore + genericScore);
+    const qualityScore = this.computeGenericQualityScore(text, sourceTier);
+    const publishScore = this.computePublishScore(primaryScore, qualityScore);
 
     this.logger.log(
       `AI scoring completed for "${title}", primary=${primaryDirection}(${primaryScore}), publish=${publishScore}`,
@@ -886,9 +884,11 @@ export class AiScoringService {
     }
 
     const dimensionScores: DimensionScores = {};
+    const policy = getDirectionScoringPolicy(dir.id);
     let rawSum = 0;
-    let hasClearEvidence = false;
-    const maxRaw = dir.dimensions.length * DIMENSION_FULL;
+    let maxRaw = 0;
+    let coreEvidenceCount = 0;
+    let evidenceCount = 0;
 
     for (const dim of dir.dimensions) {
       const p = patterns[dim];
@@ -898,17 +898,23 @@ export class AiScoringService {
       }
       const score = this.detectEvidence(text, p);
       dimensionScores[dim] = score;
-      rawSum += score;
-      if (score >= DIMENSION_FULL) hasClearEvidence = true;
+      const weight = policy.weights[dim] ?? 1;
+      rawSum += score * weight;
+      maxRaw += DIMENSION_FULL * weight;
+      if (score > 0) evidenceCount++;
+      if (policy.coreDimensions.includes(dim) && score >= DIMENSION_FULL) {
+        coreEvidenceCount++;
+      }
     }
 
-    const authority = SOURCE_TIER_AUTHORITY[sourceTier] ?? 2.5;
-    rawSum = Math.min(rawSum + authority, maxRaw);
+    const hasClearEvidence =
+      coreEvidenceCount >= policy.minCoreEvidence &&
+      evidenceCount >= policy.minEvidenceDimensions;
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
 
-    const cappedScore = !hasClearEvidence
-      ? Math.min(normalizedScore, FACT_THRESHOLD)
+    const cappedScore = !hasClearEvidence || evidenceCount < 2
+      ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
       : normalizedScore;
 
     return { normalizedScore: cappedScore, hasClearEvidence, dimensionScores };
@@ -929,25 +935,29 @@ export class AiScoringService {
     llmScores: Record<string, unknown>,
   ): DirectionEvidence {
     const dimensionScores: DimensionScores = {};
+    const policy = getDirectionScoringPolicy(dir.id);
     let rawSum = 0;
+    let maxRaw = 0;
 
     for (const dimension of dir.dimensions) {
       const value = this.clampDirectionScore(llmScores[dimension]);
       dimensionScores[dimension] = value;
-      rawSum += value;
+      const weight = policy.weights[dimension] ?? 1;
+      rawSum += value * weight;
+      maxRaw += DIMENSION_FULL * weight;
     }
 
-    const hasClearEvidence = Object.values(dimensionScores).some(
-      (value) => value >= DIMENSION_FULL,
+    const hasClearEvidence = this.hasSufficientDirectionEvidence(
+      dimensionScores,
+      dir.id,
     );
-    const maxRaw = dir.dimensions.length * DIMENSION_FULL;
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
 
     return {
       normalizedScore: hasClearEvidence
         ? normalizedScore
-        : Math.min(normalizedScore, FACT_THRESHOLD),
+        : Math.min(normalizedScore, policy.maxWithoutCoreEvidence),
       hasClearEvidence,
       dimensionScores,
     };
@@ -1022,18 +1032,20 @@ export class AiScoringService {
       merged[k] = Math.max(merged[k] ?? 0, v);
     }
 
-    const maxRaw = dir.dimensions.length * DIMENSION_FULL;
+    const policy = getDirectionScoringPolicy(dir.id);
+    const maxRaw = dir.dimensions.reduce(
+      (sum, dimension) => sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
+      0,
+    );
     let rawSum = 0;
     for (const dim of dir.dimensions) {
-      rawSum += merged[dim] ?? 0;
+      rawSum += (merged[dim] ?? 0) * (policy.weights[dim] ?? 1);
     }
-    const hasClearEvidence = llm.hasClearEvidence || rule.hasClearEvidence;
-    const authority = SOURCE_TIER_AUTHORITY[sourceTier] ?? 2.5;
-    rawSum = Math.min(rawSum + authority, maxRaw);
+    const hasClearEvidence = this.hasSufficientDirectionEvidence(merged, dir.id);
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
     const cappedScore = !hasClearEvidence
-      ? Math.min(normalizedScore, FACT_THRESHOLD)
+      ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
       : normalizedScore;
 
     return {
@@ -1055,18 +1067,20 @@ export class AiScoringService {
     for (const [k, v] of Object.entries(dataEv.dimensionScores)) {
       merged[k] = Math.max(merged[k] ?? 0, v);
     }
-    const hasClearEvidence =
-      evalEv.hasClearEvidence ||
-      dataEv.hasClearEvidence ||
-      ruleEv.hasClearEvidence;
     const dir = DIRECTIONS.find((d) => d.id === 'data_eval')!;
-    const maxRaw = dir.dimensions.length * DIMENSION_FULL;
+    const policy = getDirectionScoringPolicy('data_eval');
+    const maxRaw = dir.dimensions.reduce(
+      (sum, dimension) => sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
+      0,
+    );
     let rawSum = 0;
     for (const dim of dir.dimensions) {
-      rawSum += merged[dim] ?? 0;
+      rawSum += (merged[dim] ?? 0) * (policy.weights[dim] ?? 1);
     }
-    const authority = SOURCE_TIER_AUTHORITY['signal'] ?? 2.5;
-    rawSum = Math.min(rawSum + authority, maxRaw);
+    const hasClearEvidence = this.hasSufficientDirectionEvidence(
+      merged,
+      'data_eval',
+    );
     const normalizedScore = Math.max(
       evalEv.normalizedScore,
       dataEv.normalizedScore,
@@ -1074,7 +1088,7 @@ export class AiScoringService {
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0,
     );
     const cappedScore = !hasClearEvidence
-      ? Math.min(normalizedScore, FACT_THRESHOLD)
+      ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
       : normalizedScore;
     return {
       normalizedScore: cappedScore,
@@ -1092,7 +1106,10 @@ export class AiScoringService {
 
     for (const dir of ALL_DIRECTION_IDS) {
       const ev = scores[dir];
-      if (ev && ev.normalizedScore > bestScore) {
+      // A direction is not primary unless one of its own core dimensions has
+      // strong evidence. This prevents generic words such as "AI", "API", or
+      // an organization name from turning unrelated articles into model news.
+      if (ev && ev.hasClearEvidence && ev.normalizedScore > bestScore) {
         bestScore = ev.normalizedScore;
         best = dir;
       }
@@ -1102,12 +1119,47 @@ export class AiScoringService {
     return { primaryDirection: best, primaryScore: bestScore };
   }
 
-  private computeGenericScore(text: string, sourceTier: string): number {
-    const sourcePoints = Math.min(25, SOURCE_TIER_POINTS[sourceTier] ?? 8);
-    const verifiabilityPoints = this.computeVerifiability(text);
-    const depthPoints = Math.min(5, Math.floor(text.length / 800));
-    const impactPoints = this.computeImpact(text);
-    return sourcePoints + verifiabilityPoints + depthPoints + impactPoints;
+  private hasSufficientDirectionEvidence(
+    dimensionScores: DimensionScores,
+    direction: Direction,
+  ): boolean {
+    const policy = getDirectionScoringPolicy(direction);
+    const coreEvidenceCount = policy.coreDimensions.filter(
+      (dimension) => (dimensionScores[dimension] ?? 0) >= DIMENSION_FULL,
+    ).length;
+    const evidenceCount = Object.values(dimensionScores).filter(
+      (value) => value > 0,
+    ).length;
+    return coreEvidenceCount >= policy.minCoreEvidence
+      && evidenceCount >= policy.minEvidenceDimensions;
+  }
+
+  private computePublishScore(
+    primaryScore: number,
+    quality: GenericQualityScore,
+  ): number {
+    // Direction evidence supplies 80% of the final score. Source tier and
+    // generic prose signals may improve publication confidence, not direction.
+    return Math.round(Math.min(100, primaryScore * 2 + quality.total));
+  }
+
+  private computeGenericQualityScore(
+    text: string,
+    sourceTier: string,
+  ): GenericQualityScore {
+    const sourceCredibility = Math.min(10, Math.round(
+      (SOURCE_TIER_POINTS[sourceTier] ?? 8) / 2,
+    ));
+    const verifiability = this.computeVerifiability(text);
+    const completeness = Math.min(4, Math.floor(text.length / 1200));
+    const impactSignal = this.computeImpact(text);
+    return {
+      sourceCredibility,
+      verifiability,
+      completeness,
+      impactSignal,
+      total: sourceCredibility + verifiability + completeness + impactSignal,
+    };
   }
 
   private computeVerifiability(text: string): number {
@@ -1116,7 +1168,7 @@ export class AiScoringService {
     if (ORG_NAMES.some((org) => text.toLowerCase().includes(org))) points += 3;
     const urlMatches = text.match(/https?:\/\/[^\s)]+/g);
     if (urlMatches && urlMatches.length > 0) points += 3;
-    return Math.min(10, points);
+    return Math.min(6, points);
   }
 
   private computeImpact(text: string): number {
@@ -1137,7 +1189,7 @@ export class AiScoringService {
       'industry-first',
     ];
     const matches = impactTerms.filter((t) => lower.includes(t)).length;
-    return Math.min(10, matches * 3);
+    return Math.min(4, matches * 2);
   }
 
   private findLegacyForDirection(dir: Direction): AiPluginDirection | null {

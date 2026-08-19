@@ -1,4 +1,5 @@
 import { normalizeDirection } from '../../../shared/directions';
+import { DIRECTION_SCORING_POLICIES } from '../../../shared/directions';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -24,8 +25,8 @@ describe('AI scoring capability configuration', () => {
       ),
     ) as { formValue: { prompt: string } };
 
-    expect(capability.formValue.prompt).toContain('model: entity,capability');
-    expect(capability.formValue.prompt).toContain('business_ecosystem: business_fact');
+    expect(capability.formValue.prompt).toContain('model: {entity,capability');
+    expect(capability.formValue.prompt).toContain('business_ecosystem: {business_fact');
   });
 });
 
@@ -74,6 +75,76 @@ describe('normalizeDirection - unknown direction handling', () => {
     expect(normalizeDirection('eval')).toBe('data_eval');
     expect(normalizeDirection('data')).toBe('data_eval');
     expect(normalizeDirection('security')).toBe('safety_governance');
+  });
+});
+
+describe('nine direction scorecards', () => {
+  let scoringService: {
+    ruleBasedScoreArticle: (t: string, c: string, s: string) => unknown;
+  };
+
+  beforeEach(() => {
+    jest.resetModules();
+    const {
+      AiScoringService,
+    } = require('../../../server/modules/collector/ai-scoring.service');
+    scoringService = new AiScoringService({ load: jest.fn(), call: jest.fn() });
+  });
+
+  it('assigns independent core evidence requirements to every direction', () => {
+    expect(Object.keys(DIRECTION_SCORING_POLICIES)).toHaveLength(9);
+    for (const policy of Object.values(DIRECTION_SCORING_POLICIES)) {
+      expect(policy.coreDimensions.length).toBeGreaterThan(0);
+      expect(policy.maxWithoutCoreEvidence).toBeLessThan(20);
+    }
+  });
+
+  it('does not use one shared weight profile across all directions', () => {
+    expect(DIRECTION_SCORING_POLICIES.model.weights.capability).toBe(2);
+    expect(DIRECTION_SCORING_POLICIES.applications.weights.business_problem).toBe(1.5);
+    expect(DIRECTION_SCORING_POLICIES.safety_governance.weights.verification).toBe(1.5);
+    expect(DIRECTION_SCORING_POLICIES.model.coreDimensions).not.toEqual(
+      DIRECTION_SCORING_POLICIES.applications.coreDimensions,
+    );
+  });
+
+  it('sets distinct core evidence thresholds per direction', () => {
+    for (const policy of Object.values(DIRECTION_SCORING_POLICIES)) {
+      expect(policy.minCoreEvidence).toBeGreaterThan(0);
+      expect(policy.minEvidenceDimensions).toBeGreaterThanOrEqual(
+        policy.minCoreEvidence,
+      );
+    }
+    expect(DIRECTION_SCORING_POLICIES.applications.minEvidenceDimensions).toBe(3);
+    expect(DIRECTION_SCORING_POLICIES.model.minEvidenceDimensions).toBe(3);
+  });
+
+  it('requires two model core dimensions plus breadth to become primary', () => {
+    const result = scoringService.ruleBasedScoreArticle(
+      'GPT-6 reaches 95% on MMLU',
+      'OpenAI released GPT-6 version 6.0. It reaches a record MMLU benchmark score of 95%.',
+      'authoritative',
+    ) as {
+      primaryDirection: string | null;
+      directionScores: Record<string, { normalizedScore: number }>;
+    };
+
+    expect(result.primaryDirection).toBe('model');
+    expect(result.directionScores.model.normalizedScore).toBeGreaterThan(12);
+  });
+
+  it('caps publish score without strong multi-dimension evidence', () => {
+    const result = scoringService.ruleBasedScoreArticle(
+      'AI model API update',
+      'OpenAI released a new model API. The model is available now with lower cost.',
+      'authoritative',
+    ) as {
+      primaryDirection: string | null;
+      publishScore: number;
+    };
+
+    expect(result.primaryDirection).toBeNull();
+    expect(result.publishScore).toBeLessThan(40);
   });
 });
 
@@ -181,6 +252,32 @@ describe('AiScoringService ruleBasedScoreArticle - direction classification', ()
     };
 
     expect(result.primaryDirection).toBe('data_eval');
+  });
+
+  it('does not promote a generic utility repository into an AI direction', () => {
+    const result = scoringService.ruleBasedScoreArticle(
+      'yt-dlp: A feature-rich command-line audio/video downloader',
+      'A command-line program to download videos and audio from many websites. '
+        + 'Supports subtitles, playlists, and multiple output formats.',
+      'signal',
+    ) as { primaryDirection: string | null; primaryScore: number };
+
+    expect(result.primaryDirection).toBeNull();
+    expect(result.primaryScore).toBe(0);
+  });
+
+  it('requires business evidence for applications instead of a generic product mention', () => {
+    const result = scoringService.ruleBasedScoreArticle(
+      'New AI assistant demo',
+      'A demo shows an assistant answering questions in a browser.',
+      'signal',
+    ) as {
+      primaryDirection: string | null;
+      directionScores: Record<string, { normalizedScore: number }>;
+    };
+
+    expect(result.directionScores.applications.normalizedScore).toBeLessThanOrEqual(10);
+    expect(result.primaryDirection).not.toBe('applications');
   });
 });
 

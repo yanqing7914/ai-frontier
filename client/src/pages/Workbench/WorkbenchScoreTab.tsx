@@ -36,6 +36,7 @@ import type {
 import {
   DIMENSION_FULL,
   DIRECTIONS as DIRECTION_META,
+  getDirectionScoringPolicy,
 } from '@shared/directions';
 
 const DIRECTIONS = DIRECTION_META.map(({ id, label, bg, fg }) => ({
@@ -204,6 +205,7 @@ function ScorePanel({ articleId }: ScorePanelProps) {
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
       {scores.map((score: DirectionScoreItem) => {
         const dir = getDirectionConfig(score.direction);
+        const policy = getDirectionScoringPolicy(score.direction);
         return (
           <div
             key={score.direction}
@@ -222,11 +224,19 @@ function ScorePanel({ articleId }: ScorePanelProps) {
                 {score.totalScore}
               </span>
             </div>
+            {policy && (
+              <p className="mb-2 text-[10px] leading-4 text-muted-foreground">
+                核心证据：{policy.coreDimensions.map(
+                  (key) => DIMENSION_LABELS[key] ?? key,
+                ).join(' / ')}；至少 {policy.minCoreEvidence} 项明确，
+                共 {policy.minEvidenceDimensions} 项有证据
+              </p>
+            )}
             <div className="space-y-1.5">
               {Object.entries(score.dimensionScores).map(
                 ([key, value]: [string, number]) => (
                   <div key={key} className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-12 shrink-0">
+                    <span className="text-xs text-muted-foreground w-16 shrink-0">
                       {DIMENSION_LABELS[key] ?? key}
                     </span>
                     <span className="font-mono text-xs w-5 text-right shrink-0">

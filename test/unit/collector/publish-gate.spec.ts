@@ -1,8 +1,8 @@
 import { hasCoreEvidence, canPublishArticle, aggregateDirectionScores } from '../../../server/modules/collector/publish-gate';
 
 describe('hasCoreEvidence', () => {
-  it('returns true when a direction-specific dimension >= 5 (DIMENSION_FULL)', () => {
-    const scores = { industry: 5, business_problem: 0, launch_status: 0 };
+  it('returns true when enough application core dimensions have direct evidence', () => {
+    const scores = { industry: 5, business_problem: 5, roi: 2.5 };
     expect(hasCoreEvidence(scores, 'applications')).toBe(true);
   });
 
@@ -44,6 +44,31 @@ describe('hasCoreEvidence', () => {
     const scores = { hardware: 5, training: 5 };
     expect(hasCoreEvidence(scores, 'applications')).toBe(false);
   });
+
+  it('requires an application core dimension, not a secondary application detail', () => {
+    expect(hasCoreEvidence({ roi: 5, scale: 5 }, 'applications')).toBe(false);
+    expect(hasCoreEvidence({ industry: 5, business_problem: 5, roi: 5 }, 'applications')).toBe(true);
+  });
+
+  it('requires a model identity or capability fact, not an ecosystem detail', () => {
+    expect(hasCoreEvidence({ ecosystem: 5, adoption: 5 }, 'model')).toBe(false);
+    expect(hasCoreEvidence({ entity: 5, capability: 5, performance: 5 }, 'model')).toBe(true);
+  });
+
+  it('requires both model core dimensions instead of a single capability hit', () => {
+    expect(hasCoreEvidence({ capability: 5, cost: 2.5 }, 'model')).toBe(false);
+    expect(hasCoreEvidence({ entity: 5, capability: 5, cost: 2.5 }, 'model')).toBe(true);
+  });
+
+  it('requires two application core dimensions, not one strong hit', () => {
+    expect(hasCoreEvidence({ industry: 5, scale: 5 }, 'applications')).toBe(false);
+    expect(hasCoreEvidence({ industry: 5, business_problem: 5, roi: 5 }, 'applications')).toBe(true);
+  });
+
+  it('requires enough evidence dimensions to avoid keyword-only scoring', () => {
+    expect(hasCoreEvidence({ entity: 5, capability: 5 }, 'model')).toBe(false);
+    expect(hasCoreEvidence({ entity: 5, capability: 5, performance: 2.5 }, 'model')).toBe(true);
+  });
 });
 
 describe('canPublishArticle', () => {
@@ -51,7 +76,7 @@ describe('canPublishArticle', () => {
     primaryDirection: 'model' as string | null,
     primaryScore: 80,
     status: 'draft',
-    dimensionScores: { entity: 5, capability: 5 } as Record<string, number> | null,
+    dimensionScores: { entity: 5, capability: 5, performance: 5 } as Record<string, number> | null,
     publishThreshold: 75,
   };
 
@@ -142,7 +167,24 @@ describe('canPublishArticle', () => {
       primaryDirection: 'eval',
       primaryScore: 80,
       status: 'draft',
-      dimensionScores: { data_asset: 5 },
+      dimensionScores: { data_asset: 5, methodology: 5, performance: 5 },
+      publishThreshold: 75,
+    })).toBe(true);
+  });
+
+  it('rejects keyword-only evidence in the primary direction', () => {
+    expect(canPublishArticle({
+      primaryDirection: 'model',
+      primaryScore: 85,
+      status: 'draft',
+      dimensionScores: { entity: 5, capability: 5 },
+      publishThreshold: 75,
+    })).toBe(false);
+    expect(canPublishArticle({
+      primaryDirection: 'model',
+      primaryScore: 85,
+      status: 'draft',
+      dimensionScores: { entity: 5, capability: 5, performance: 5 },
       publishThreshold: 75,
     })).toBe(true);
   });

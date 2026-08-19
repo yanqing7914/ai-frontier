@@ -4,6 +4,7 @@ import {
   DIMENSION_FULL,
   normalizeDirection,
   ALL_DIRECTION_IDS,
+  getDirectionScoringPolicy,
 } from '../../../shared/directions';
 import type { DimensionScores, DirectionScoreItem } from '@shared/api.interface';
 
@@ -20,11 +21,16 @@ export function hasCoreEvidence(
 
   const meta = DIRECTIONS.find((d) => d.id === normalized);
   if (meta) {
-    for (const dim of meta.dimensions) {
-      if (typeof dimensionScores[dim] === 'number' && dimensionScores[dim] >= DIMENSION_FULL) {
-        return true;
-      }
-    }
+    const policy = getDirectionScoringPolicy(normalized);
+    const coreCount = policy.coreDimensions.filter((dim) =>
+      typeof dimensionScores[dim] === 'number'
+      && dimensionScores[dim] >= DIMENSION_FULL,
+    ).length;
+    const evidenceCount = Object.values(dimensionScores).filter(
+      (value) => typeof value === 'number' && value > 0,
+    ).length;
+    if (coreCount >= policy.minCoreEvidence
+      && evidenceCount >= policy.minEvidenceDimensions) return true;
   }
 
   const legacySum = LEGACY_DIM_KEYS.reduce(
