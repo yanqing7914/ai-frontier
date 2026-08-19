@@ -319,6 +319,9 @@ export const feedSource = pgTable("feed_source", {
   lastSuccessAt: customTimestamptz("last_success_at", { precision: 3 }),
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   lastError: text("last_error"),
+  // Scheduler hint: failed sources are retried after this time instead of on
+  // every hourly pipeline run. A successful fetch clears the cooldown.
+  nextFetchAt: customTimestamptz("next_fetch_at", { precision: 3 }),
   sourceCategory: varchar("source_category", { length: 100 }),
   sourceCategoryId: varchar("source_category_id", { length: 100 }),
   region: varchar("region", { length: 50 }).default('global'),

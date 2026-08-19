@@ -29,6 +29,7 @@ export interface FeedSource {
   lastSuccessAt: string | null;
   consecutiveFailures: number;
   lastError: string | null;
+  nextFetchAt: string | null;
   sourceCategory: string | null;
   sourceCategoryId: string | null;
   region: string | null;
@@ -50,6 +51,7 @@ export interface FeedSourceListItem {
   successRate: number;
   lastSuccessAt: string | null;
   consecutiveFailures: number;
+  nextFetchAt: string | null;
   sourceCategory: string | null;
   sourceCategoryId: string | null;
   primaryDirectionId: string | null;
@@ -64,6 +66,7 @@ export interface FeedSourceHealth {
   lastSuccessAt: string | null;
   consecutiveFailures: number;
   lastError: string | null;
+  nextFetchAt: string | null;
 }
 
 export interface CreateFeedSourceRequest {

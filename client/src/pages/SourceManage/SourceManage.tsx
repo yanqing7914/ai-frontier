@@ -546,7 +546,7 @@ function SourceManage() {
                     {isExpanded && (
                       <tr>
                         <td colSpan={9} className="bg-muted/20 px-4 py-3">
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                             <div>
                               <span className="text-muted-foreground">
                                 总抓取次数
@@ -582,6 +582,16 @@ function SourceManage() {
                                 title={health?.lastError ?? ''}
                               >
                                 {health?.lastError || '无'}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">
+                                下次尝试
+                              </span>
+                              <p className="text-xs font-mono">
+                                {health?.nextFetchAt
+                                  ? dayjs(health.nextFetchAt).format('MM/DD HH:mm')
+                                  : '按计划'}
                               </p>
                             </div>
                           </div>

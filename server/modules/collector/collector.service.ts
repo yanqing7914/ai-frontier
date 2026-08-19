@@ -3,7 +3,7 @@ import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
 } from '@lark-apaas/fullstack-nestjs-core';
-import { eq, ne, inArray, and, isNotNull, sql } from 'drizzle-orm';
+import { eq, ne, inArray, and, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   article, feedSource, directionScore, qualityGate,
   reviewItem, appConfig,
@@ -175,14 +175,22 @@ export class CollectorService {
     const aiDailyLimit = await this.getConfig('ai_daily_limit', 500);
 
     // ── Stage 1/12: source_ingest ──
-    const sources = await this.db.select().from(feedSource).where(eq(feedSource.enabled, true));
+    const sources = await this.db
+      .select()
+      .from(feedSource)
+      .where(
+        and(
+          eq(feedSource.enabled, true),
+          or(isNull(feedSource.nextFetchAt), lte(feedSource.nextFetchAt, new Date())),
+        ),
+      );
     if (sources.length === 0) {
-      this.logger.log('[1/12] source_ingest: 0 enabled sources');
+      this.logger.log('[1/12] source_ingest: 0 eligible sources');
       this.logEmptyStages(2);
       await this.ensureDigest(today);
       return;
     }
-    this.logger.log(`[1/12] source_ingest: ${sources.length} enabled sources`);
+    this.logger.log(`[1/12] source_ingest: ${sources.length} eligible sources (enabled and not cooling down)`);
 
     // ── Stage 2/12: scheduled_fetch ──
     const rawResponses: RawFetchResponse[] = [];

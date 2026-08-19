@@ -61,6 +61,7 @@ export class FeedSourceService {
           successFetches: feedSource.successFetches,
           lastSuccessAt: feedSource.lastSuccessAt,
           consecutiveFailures: feedSource.consecutiveFailures,
+          nextFetchAt: feedSource.nextFetchAt,
           sourceCategory: feedSource.sourceCategory,
           sourceCategoryId: feedSource.sourceCategoryId,
           primaryDirectionId: feedSource.primaryDirectionId,
@@ -95,6 +96,7 @@ export class FeedSourceService {
         ? row.lastSuccessAt.toISOString()
         : null,
       consecutiveFailures: row.consecutiveFailures,
+      nextFetchAt: row.nextFetchAt ? row.nextFetchAt.toISOString() : null,
       sourceCategory: row.sourceCategory ?? null,
       sourceCategoryId: row.sourceCategoryId ?? null,
       primaryDirectionId: row.primaryDirectionId
@@ -218,6 +220,7 @@ export class FeedSourceService {
         lastSuccessAt: feedSource.lastSuccessAt,
         consecutiveFailures: feedSource.consecutiveFailures,
         lastError: feedSource.lastError,
+        nextFetchAt: feedSource.nextFetchAt,
       })
       .from(feedSource)
       .where(eq(feedSource.id, id))
@@ -242,6 +245,7 @@ export class FeedSourceService {
         : null,
       consecutiveFailures: row.consecutiveFailures,
       lastError: row.lastError,
+      nextFetchAt: row.nextFetchAt ? row.nextFetchAt.toISOString() : null,
     };
   }
 
@@ -259,6 +263,7 @@ export class FeedSourceService {
           consecutiveFailures: 0,
           lastSuccessAt: new Date(),
           lastError: null,
+          nextFetchAt: null,
         })
         .where(eq(feedSource.id, id))
         .returning({ id: feedSource.id });
@@ -270,12 +275,20 @@ export class FeedSourceService {
       return rows[0];
     }
 
+    // Keep retrying recoverable outages, but never spend every scheduled run
+    // on a source that is known to be broken.  Permanent-looking HTTP errors
+    // get a longer cooldown while still remaining automatically recoverable.
+    const nextFetchAt = getSourceRetryAt(
+      error,
+      await this.getConsecutiveFailures(id),
+    );
     const rows = await this.db
       .update(feedSource)
       .set({
         totalFetches: sql`${feedSource.totalFetches} + 1`,
         consecutiveFailures: sql`${feedSource.consecutiveFailures} + 1`,
         lastError: error ?? null,
+        nextFetchAt,
       })
       .where(eq(feedSource.id, id))
       .returning({ id: feedSource.id });
@@ -286,4 +299,36 @@ export class FeedSourceService {
 
     return rows[0];
   }
+
+  private async getConsecutiveFailures(id: string): Promise<number> {
+    const [row] = await this.db
+      .select({ consecutiveFailures: feedSource.consecutiveFailures })
+      .from(feedSource)
+      .where(eq(feedSource.id, id))
+      .limit(1);
+    return row?.consecutiveFailures ?? 0;
+  }
+}
+
+/**
+ * Return the next retry time after a failed attempt. The caller supplies the
+ * current consecutive-failure count; the failed attempt itself is counted
+ * before calculating the delay.
+ */
+export function getSourceRetryAt(
+  error: string | undefined,
+  currentConsecutiveFailures: number,
+  now: Date = new Date(),
+): Date | null {
+  const failures = Math.max(1, currentConsecutiveFailures + 1);
+  if (failures < 3) return null;
+
+  const message = error ?? '';
+  const isPermanentHttpError = /HTTP\s+(?:401|403|404|410)\b/i.test(message);
+  const delayMs = isPermanentHttpError
+    ? 7 * 24 * 60 * 60 * 1000
+    // The pipeline runs hourly, so the first cooldown must exceed one hour;
+    // otherwise a source still gets retried by the very next scheduled run.
+    : Math.min(7 * 24 * 60 * 60 * 1000, 2 * 60 * 60 * 1000 * 2 ** (failures - 3));
+  return new Date(now.getTime() + delayMs);
 }
