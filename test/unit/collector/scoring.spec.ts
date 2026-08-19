@@ -1,4 +1,33 @@
 import { normalizeDirection } from '../../../shared/directions';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+describe('AI scoring capability configuration', () => {
+  it('keeps every output-field description within the platform limit', () => {
+    const capability = JSON.parse(
+      readFileSync(
+        resolve(process.cwd(), 'server/capabilities/ai_article_scoring_1.json'),
+        'utf8',
+      ),
+    ) as { formValue: { jsonStructure: Array<{ paramDescription: string }> } };
+
+    for (const field of capability.formValue.jsonStructure) {
+      expect(field.paramDescription.length).toBeLessThanOrEqual(500);
+    }
+  });
+
+  it('puts the nine direction schemas in the prompt rather than one limited field description', () => {
+    const capability = JSON.parse(
+      readFileSync(
+        resolve(process.cwd(), 'server/capabilities/ai_article_scoring_1.json'),
+        'utf8',
+      ),
+    ) as { formValue: { prompt: string } };
+
+    expect(capability.formValue.prompt).toContain('model: entity,capability');
+    expect(capability.formValue.prompt).toContain('business_ecosystem: business_fact');
+  });
+});
 
 describe('normalizeDirection - unknown direction handling', () => {
   it('returns null for unknown_direction', () => {
