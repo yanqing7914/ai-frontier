@@ -1,4 +1,4 @@
-import { PIPELINE_STAGE_ORDER } from '../../../server/modules/collector/collector.service';
+import { PIPELINE_STAGE_ORDER, shouldAttemptAiScoring } from '../../../server/modules/collector/collector.service';
 import { normalizeItems, decodeEntities, cleanContent, computeContentHash, normalizeUrlForDedup } from '../../../server/modules/collector/pipeline-normalize';
 import { dedupBatch, filterAgainstExisting, stripTrackingParams } from '../../../server/modules/collector/pipeline-dedup';
 import { parseRssContent } from '../../../server/modules/collector/parsers/rss-parser';
@@ -78,6 +78,16 @@ describe('PIPELINE_STAGE_ORDER (production export)', () => {
       'url_dedup', 'trace', 'classify', 'cluster',
       'rule_score', 'ai_score', 'quality_gate', 'publish_outputs',
     ]);
+  });
+});
+
+describe('AI scoring prefilter', () => {
+  it('spends AI quota only on articles with a relevant topic candidate', () => {
+    expect(shouldAttemptAiScoring('classified')).toBe(true);
+    expect(shouldAttemptAiScoring('ambiguous')).toBe(true);
+    expect(shouldAttemptAiScoring('no_match')).toBe(false);
+    expect(shouldAttemptAiScoring('degraded')).toBe(false);
+    expect(shouldAttemptAiScoring(undefined)).toBe(false);
   });
 });
 

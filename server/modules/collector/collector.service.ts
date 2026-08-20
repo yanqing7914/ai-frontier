@@ -45,6 +45,11 @@ const MAX_FETCH_TIMEOUT_MS = 60_000;
 const MIN_FETCH_BODY_BYTES = 64 * 1024;
 const MAX_FETCH_BODY_BYTES = 10 * 1024 * 1024;
 
+/** Only classified/ambiguous topics are worth spending the daily AI quota on. */
+export function shouldAttemptAiScoring(status: string | undefined): boolean {
+  return status === 'classified' || status === 'ambiguous';
+}
+
 interface PipelineArticle { id: string; title: string; url: string; dedupUrl: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; sourceName: string; sourceCategoryId: string | null; originPolicy: 'first_party' | 'editorial' | 'aggregator'; }
 interface RawFetchResponse { feedSourceId: string; feedType: string; url: string; finalUrl: string; contentType: string; sourceName: string; sourceTier: string; sourceCategoryId: string | null; originPolicy: string | null; rawContent: string; byteLength: number; httpStatus: number; }
 
@@ -893,7 +898,10 @@ export class CollectorService {
     const perSourceCount = new Map<string, number>();
     const todayAiArticles = await this.db
       .select({ feedSourceId: article.feedSourceId }).from(article)
-      .where(and(eq(article.aiProcessed, true), sql`${article.collectedAt}::date = ${today}::date`));
+      .where(and(
+        eq(article.aiProcessed, true),
+        sql`(${article.collectedAt} AT TIME ZONE 'Asia/Shanghai')::date = ${today}::date`,
+      ));
     for (const row of todayAiArticles) {
       if (row.feedSourceId) perSourceCount.set(row.feedSourceId, (perSourceCount.get(row.feedSourceId) || 0) + 1);
     }
@@ -916,6 +924,39 @@ export class CollectorService {
       const srcUsed = perSourceCount.get(art.feedSourceId) || 0;
       let result;
       let usedAi = false;
+
+      const classifyMeta = classifyMetaMap.get(art.id);
+      if (!shouldAttemptAiScoring(classifyMeta?.status)) {
+        // A no-match/degraded topic has already failed the cheap, direction-
+        // specific relevance pass. Keep its rule score for audit, but do not
+        // spend a provider call or quota unit on unrelated feed noise.
+        const reason = classifyMeta?.status === 'degraded'
+          ? 'ai_skipped_classification_degraded'
+          : 'ai_skipped_no_relevant_direction';
+        result = { ...this.aiScoringService.ruleBasedScoreArticle(art.title, art.content, tier, reason) };
+        aiDegraded++;
+        await this.db.transaction(async (tx) => {
+          await tx.delete(directionScore).where(eq(directionScore.articleId, art.id));
+          for (const dir of DIRECTIONS) {
+            const ev = result.directionScores[dir];
+            await tx.insert(directionScore).values({
+              articleId: art.id, direction: dir,
+              dimensionScores: ev?.dimensionScores ?? {},
+              evidence: Object.values(ev?.evidenceByDimension ?? {}).flat(),
+              totalScore: ev?.normalizedScore ?? 0,
+            });
+          }
+          await tx.update(article).set({
+            primaryDirection: null,
+            primaryScore: result.publishScore,
+            summary: result.summary,
+            aiProcessed: false,
+            aiDegradeReason: reason,
+            status: traceFailIds.has(art.id) ? 'pending_review' : 'draft',
+          }).where(eq(article.id, art.id));
+        });
+        continue;
+      }
 
       if (aiCount < aiDailyLimit && srcUsed < aiPerSourceLimit
         && await this.reserveAiQuota(today, aiDailyLimit, art.feedSourceId, aiPerSourceLimit)) {
@@ -1262,7 +1303,9 @@ export class CollectorService {
       FROM article a
       LEFT JOIN feed_source fs ON fs.id = a.feed_source_id
       WHERE a.status = 'published' AND a.primary_score >= ${publishThreshold}
-        AND coalesce(published_at, collected_at) > now() - interval '7 days'
+        AND (
+          coalesce(a.published_at, a.collected_at) AT TIME ZONE 'Asia/Shanghai'
+        )::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date
       ORDER BY a.primary_score DESC, coalesce(a.published_at, a.collected_at) DESC
     `);
     interface CandidateRow {
@@ -1391,7 +1434,9 @@ export class CollectorService {
       .from(article)
       .where(and(
         eq(article.aiProcessed, false),
-        sql`coalesce(${article.publishedAt}, ${article.collectedAt}) > NOW() - INTERVAL '7 days'`,
+        // Backlog rescoring must not consume today's provider quota before
+        // current-day articles have a chance to become publishable.
+        sql`(${article.collectedAt} AT TIME ZONE 'Asia/Shanghai')::date = ${today}::date`,
         sql`${article.sourceName} != 'arXiv cs.AI'`,
       ));
     this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);

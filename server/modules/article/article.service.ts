@@ -63,9 +63,14 @@ export class ArticleService {
       ? directions.map((d: string) => normalizeDirection(d)).filter((d): d is Direction => d !== null)
       : undefined;
 
+    // Today's feed is intentionally a Shanghai-calendar view. Historical
+    // published articles belong to archive endpoints and must not silently
+    // backfill the page when today's selection is small.
     const baseConditions = [
       eq(article.status, 'published'),
-      sql`coalesce(${article.publishedAt}, ${article.collectedAt}) >= now() - interval '7 days'`,
+      sql`(
+        coalesce(${article.publishedAt}, ${article.collectedAt}) AT TIME ZONE 'Asia/Shanghai'
+      )::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date`,
       gte(article.primaryScore, publishThreshold),
     ];
     if (normalizedDirections && normalizedDirections.length > 0) {
