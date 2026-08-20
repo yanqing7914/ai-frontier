@@ -456,24 +456,67 @@ export class CollectorService {
   }
 
   private async acquirePipelineLease(token: string): Promise<boolean> {
-    const expiresAt = new Date(Date.now() + PIPELINE_LEASE_MS).toISOString();
-    const rows = await this.db.execute(sql`
-      INSERT INTO app_config (key, value, description)
-      VALUES (${PIPELINE_RUN_LEASE_KEY}, jsonb_build_object('token', ${token}, 'expiresAt', ${expiresAt}), 'Cross-instance collector run lease')
-      ON CONFLICT (key) DO UPDATE
-        SET value = EXCLUDED.value, description = EXCLUDED.description
-        WHERE COALESCE(app_config.value ->> 'expiresAt', '') < ${new Date().toISOString()}
-      RETURNING id
-    `);
-    return (rows as unknown as unknown[]).length > 0;
+    const now = Date.now();
+    const expiresAt = new Date(now + PIPELINE_LEASE_MS).toISOString();
+    const [existing] = await this.db
+      .select({ value: appConfig.value })
+      .from(appConfig)
+      .where(eq(appConfig.key, PIPELINE_RUN_LEASE_KEY));
+
+    const existingLease = existing?.value as { expiresAt?: unknown } | undefined;
+    const existingExpiresAt = typeof existingLease?.expiresAt === 'string'
+      ? Date.parse(existingLease.expiresAt)
+      : Number.NaN;
+    if (existing && Number.isFinite(existingExpiresAt) && existingExpiresAt >= now) {
+      return false;
+    }
+
+    const lease = { token, expiresAt };
+    if (!existing) {
+      try {
+        await this.db.insert(appConfig).values({
+          key: PIPELINE_RUN_LEASE_KEY,
+          value: lease,
+          description: 'Cross-instance collector run lease',
+        });
+        return true;
+      } catch (error: unknown) {
+        // A competing instance may have inserted the lease first. Re-read instead
+        // of treating a unique-key race as a failed collection run.
+        const [raced] = await this.db
+          .select({ value: appConfig.value })
+          .from(appConfig)
+          .where(eq(appConfig.key, PIPELINE_RUN_LEASE_KEY));
+        if (raced) return false;
+        throw error;
+      }
+    }
+
+    const updated = await this.db
+      .update(appConfig)
+      .set({ value: lease, description: 'Cross-instance collector run lease' })
+      .where(and(
+        eq(appConfig.key, PIPELINE_RUN_LEASE_KEY),
+        eq(appConfig.value, existing.value),
+      ))
+      .returning({ id: appConfig.id });
+    return updated.length === 1;
   }
 
   private async releasePipelineLease(token: string): Promise<void> {
-    await this.db.execute(sql`
-      UPDATE app_config
-      SET value = jsonb_build_object('token', ${token}, 'expiresAt', ${new Date(0).toISOString()})
-      WHERE key = ${PIPELINE_RUN_LEASE_KEY} AND value ->> 'token' = ${token}
-    `);
+    const [existing] = await this.db
+      .select({ value: appConfig.value })
+      .from(appConfig)
+      .where(eq(appConfig.key, PIPELINE_RUN_LEASE_KEY));
+    const lease = existing?.value as { token?: unknown } | undefined;
+    if (lease?.token !== token || !existing) return;
+    await this.db
+      .update(appConfig)
+      .set({ value: { token, expiresAt: new Date(0).toISOString() } })
+      .where(and(
+        eq(appConfig.key, PIPELINE_RUN_LEASE_KEY),
+        eq(appConfig.value, existing.value),
+      ));
   }
 
   /** Log all remaining stages from `from` (1-indexed) as skipped/empty. */
