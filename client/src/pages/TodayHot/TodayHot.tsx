@@ -187,6 +187,11 @@ const TodayHot = () => {
           <div className="flex flex-col gap-3">
             {filtered.map((article: HotArticleItem) => {
               const dirConf = directionOf(article.primaryDirection);
+              // Keep the preview compatible with articles written before the
+              // editorial presentation fields were added to the API.
+              const articleLink = article.originalUrl || article.url;
+              const readableTitle = article.displayTitle || article.title;
+              const readableSummary = article.summary?.trim() || '原文暂未提供可读摘要，请查看原文。';
               return (
                 <div
                   key={article.id}
@@ -196,13 +201,15 @@ const TodayHot = () => {
                   {/* Left: Content */}
                   <div className="flex-1 min-w-0">
                     <UniversalLink
-                      to={article.url}
+                      to={articleLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm font-semibold text-foreground hover:text-primary transition-colors inline-flex items-center gap-1 group"
+                      title={`原始标题：${article.title}`}
+                      aria-label={`打开原文：${readableTitle}`}
+                      className="inline-flex items-start gap-1.5 text-[15px] font-semibold leading-6 text-foreground underline-offset-4 transition-colors hover:text-primary hover:underline group"
                     >
-                      <span className="line-clamp-2">{article.title}</span>
-                      <ExternalLink className="size-3 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity" />
+                      <span className="line-clamp-2">{readableTitle}</span>
+                      <ExternalLink className="mt-1 size-3.5 shrink-0 text-primary/70 transition-colors group-hover:text-primary" />
                     </UniversalLink>
 
                     <div className="flex items-center gap-2 mt-2">
@@ -230,13 +237,26 @@ const TodayHot = () => {
                       )}
                     </div>
 
-                    <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
-                      {article.summary}
-                    </p>
+                    <div className="mt-3 border-l-2 border-primary/25 pl-3">
+                      <p className="mb-1 text-[11px] font-medium tracking-wide text-primary">
+                        这条信息说明什么
+                      </p>
+                      <p className="line-clamp-3 text-sm leading-6 text-muted-foreground">
+                        {readableSummary}
+                      </p>
+                    </div>
 
-                    <p className="text-xs text-muted-foreground mt-2">
-                      {dayjs(article.publishedAt).fromNow()}
-                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{dayjs(article.publishedAt).fromNow()}</span>
+                      <UniversalLink
+                        to={articleLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-primary hover:underline"
+                      >
+                        查看原文
+                      </UniversalLink>
+                    </div>
                   </div>
 
                   {/* Right: Score */}

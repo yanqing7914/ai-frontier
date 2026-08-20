@@ -42,6 +42,7 @@ import type {
 import { getOriginPolicy } from '../collector/trace-engine';
 import { normalizeDirection } from '@shared/api.interface';
 import { ALL_DIRECTION_IDS } from '@shared/directions';
+import { presentHotArticle } from './hot-article-presentation';
 
 @Injectable()
 export class ArticleService {
@@ -150,21 +151,31 @@ export class ArticleService {
       }
     }
 
-    const items: HotArticleItem[] = rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      url: row.url,
-      originalUrl: row.originalUrl,
-      summary: row.summary ?? '',
-      sourceName: row.sourceName,
-      primaryDirection: normalizeDirection(row.primaryDirection) ?? 'model',
-      primaryScore: row.primaryScore ?? 0,
-      publishedAt: row.publishedAt?.toISOString() ?? '',
-      clusterCount: row.clusterId
-        ? (clusterCountMap.get(row.clusterId) ?? 1)
-        : 1,
-      frontPageRank: row.frontPageRank ?? null,
-    }));
+    const items: HotArticleItem[] = rows.map((row) => {
+      const primaryDirection = normalizeDirection(row.primaryDirection) ?? 'model';
+      const presentation = presentHotArticle({
+        title: row.title,
+        summary: row.summary,
+        sourceName: row.sourceName,
+        direction: primaryDirection,
+      });
+      return {
+        id: row.id,
+        title: row.title,
+        displayTitle: presentation.displayTitle,
+        url: row.url,
+        originalUrl: row.originalUrl,
+        summary: presentation.summary,
+        sourceName: row.sourceName,
+        primaryDirection,
+        primaryScore: row.primaryScore ?? 0,
+        publishedAt: row.publishedAt?.toISOString() ?? '',
+        clusterCount: row.clusterId
+          ? (clusterCountMap.get(row.clusterId) ?? 1)
+          : 1,
+        frontPageRank: row.frontPageRank ?? null,
+      };
+    });
 
     return { items, total };
   }

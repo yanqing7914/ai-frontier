@@ -123,7 +123,10 @@ export interface Article {
 
 export interface HotArticleItem {
   id: string;
+  /** Auditable source title. */
   title: string;
+  /** Concise Chinese editorial title used by the reader UI. */
+  displayTitle: string;
   url: string;
   originalUrl: string | null;
   summary: string;
