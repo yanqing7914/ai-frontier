@@ -3,7 +3,7 @@ import {
   type PostgresJsDatabase,
 } from '@lark-apaas/fullstack-nestjs-core';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql, isNotNull } from 'drizzle-orm';
 import { dailyDigest, article } from '@server/database/schema';
 import type { DailyDigest, DailyDigestArticle, Direction } from '@shared/api.interface';
 import { normalizeDirection } from '@shared/api.interface';
@@ -59,10 +59,14 @@ export class DigestService {
   }
 
   async generateDigest(dateStr: string): Promise<DailyDigest> {
-    const [existing] = await this.db
-      .select()
-      .from(dailyDigest)
-      .where(eq(dailyDigest.digestDate, dateStr));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      throw new Error(`Invalid digest date: ${dateStr}`);
+    }
+    const nextDate = new Date(`${dateStr}T00:00:00Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const nextDateStr = nextDate.toISOString().slice(0, 10);
+    const start = `${dateStr} 00:00:00+08:00`;
+    const end = `${nextDateStr} 00:00:00+08:00`;
 
     const articles = await this.db
       .select({
@@ -75,7 +79,10 @@ export class DigestService {
       .where(
         and(
           eq(article.status, 'published'),
-          sql`${article.collectedAt}::date::text = ${dateStr}`,
+          isNotNull(article.primaryScore),
+          isNotNull(article.primaryDirection),
+          sql`COALESCE(${article.publishedAt}, ${article.collectedAt}) >= ${start}::timestamptz`,
+          sql`COALESCE(${article.publishedAt}, ${article.collectedAt}) < ${end}::timestamptz`,
         ),
       );
 
@@ -85,30 +92,23 @@ export class DigestService {
     );
     const summary = `今日共 ${articles.length} 条 AI 热点：${summaryParts.join('；')}`;
 
-    let digestRow = existing;
-    if (existing) {
-      const [updated] = await this.db
-        .update(dailyDigest)
-        .set({
+    const [digestRow] = await this.db
+      .insert(dailyDigest)
+      .values({
+        digestDate: dateStr,
+        summary,
+        articleCount: articles.length,
+        articleIds: articles.map((a) => a.id),
+      })
+      .onConflictDoUpdate({
+        target: dailyDigest.digestDate,
+        set: {
           summary,
           articleCount: articles.length,
           articleIds: articles.map((a) => a.id),
-        })
-        .where(eq(dailyDigest.id, existing.id))
-        .returning();
-      digestRow = updated;
-    } else {
-      const [inserted] = await this.db
-        .insert(dailyDigest)
-        .values({
-          digestDate: dateStr,
-          summary,
-          articleCount: articles.length,
-          articleIds: articles.map((a) => a.id),
-        })
-        .returning();
-      digestRow = inserted;
-    }
+        },
+      })
+      .returning();
 
     const digestArticles: DailyDigestArticle[] = articles.map((a) => ({
       id: a.id,

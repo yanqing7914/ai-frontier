@@ -19,6 +19,8 @@ export interface AiArticleScoringOneOutput {
   summary: string;
   /** 9个前台方向的专属维度评分结果，每个维度为0、2.5或5附近的0-5数值。 */
   scores: Record<string, unknown>;
+  /** 每个非零维度的原文证据；服务端会拒绝无法回溯到文章的证据。 */
+  evidence?: unknown[];
 }
 // ---- end:ai_article_scoring_1 ----
 

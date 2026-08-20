@@ -41,9 +41,12 @@ export function DigestDialog({
   const handleOpenChange = useCallback(
     (nextOpen: boolean): void => {
       if (nextOpen && !digest) {
-        const today: string = new Date()
-          .toISOString()
-          .split('T')[0];
+        const today: string = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date());
         setLoading(true);
         setNotFound(false);
         getDailyDigest(today)

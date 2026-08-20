@@ -28,6 +28,7 @@ import type {
   WorkbenchOverview,
   WorkbenchArticleItem,
   DirectionScoreItem,
+  ScoreEvidence,
   ArticleTrace,
   QualityGateItem,
   PaginatedResponse,
@@ -71,16 +72,14 @@ export class ArticleService {
       baseConditions.push(inArray(article.primaryDirection, normalizedDirections));
     }
 
-    const rankedWhere = and(...baseConditions, isNotNull(article.frontPageRank));
-    const supplementWhere = and(...baseConditions, isNull(article.frontPageRank));
-
-    const [rankedCountResult, supplementCountResult] = await Promise.all([
+    // The bounded front page is intentionally strict: archive/supplement items
+    // must be exposed by a separate endpoint and never mixed into this feed.
+    const rankedWhere = and(...baseConditions, isNotNull(article.frontPageRank), isNull(article.excludeReason));
+    const [rankedCountResult] = await Promise.all([
       this.db.select({ count: count() }).from(article).where(rankedWhere),
-      this.db.select({ count: count() }).from(article).where(supplementWhere),
     ]);
     const rankedCount = Number(rankedCountResult[0]?.count ?? 0);
-    const supplementCount = Number(supplementCountResult[0]?.count ?? 0);
-    const total = rankedCount + supplementCount;
+    const total = rankedCount;
 
     const pageItems: Array<{
       id: string;
@@ -117,51 +116,6 @@ export class ArticleService {
         .limit(pageSize)
         .offset(offset);
       pageItems.push(...rankedPage);
-
-      const remaining = pageSize - rankedPage.length;
-      if (remaining > 0) {
-        const supplementPage = await this.db
-          .select({
-            id: article.id,
-            title: article.title,
-            url: article.url,
-            originalUrl: article.originalUrl,
-            summary: article.summary,
-            sourceName: article.sourceName,
-            primaryDirection: article.primaryDirection,
-            primaryScore: article.primaryScore,
-            publishedAt: article.publishedAt,
-            clusterId: article.clusterId,
-            frontPageRank: article.frontPageRank,
-          })
-          .from(article)
-          .where(supplementWhere)
-          .orderBy(desc(article.primaryScore), desc(sql`coalesce(${article.publishedAt}, ${article.collectedAt})`))
-          .limit(remaining);
-        pageItems.push(...supplementPage);
-      }
-    } else {
-      const supplementOffset = offset - rankedCount;
-      const supplementPage = await this.db
-        .select({
-          id: article.id,
-          title: article.title,
-          url: article.url,
-          originalUrl: article.originalUrl,
-          summary: article.summary,
-          sourceName: article.sourceName,
-          primaryDirection: article.primaryDirection,
-          primaryScore: article.primaryScore,
-          publishedAt: article.publishedAt,
-          clusterId: article.clusterId,
-          frontPageRank: article.frontPageRank,
-        })
-        .from(article)
-        .where(supplementWhere)
-        .orderBy(desc(article.primaryScore), desc(sql`coalesce(${article.publishedAt}, ${article.collectedAt})`))
-        .limit(pageSize)
-        .offset(supplementOffset);
-      pageItems.push(...supplementPage);
     }
 
     const rows = pageItems;
@@ -356,17 +310,25 @@ export class ArticleService {
         direction: directionScore.direction,
         totalScore: directionScore.totalScore,
         dimensionScores: directionScore.dimensionScores,
+        evidence: directionScore.evidence,
       })
       .from(directionScore)
       .where(eq(directionScore.articleId, id));
 
-    const grouped = new Map<string, { totalScore: number; dimensionScores: DimensionScores }>();
+    const grouped = new Map<string, {
+      totalScore: number;
+      dimensionScores: DimensionScores;
+      evidence: ScoreEvidence[];
+    }>();
 
     for (const row of scores) {
       const dir = normalizeDirection(row.direction);
       if (!dir) continue;
       const existing = grouped.get(dir);
       const rowScores = (row.dimensionScores ?? {}) as DimensionScores;
+      const rowEvidence = Array.isArray(row.evidence)
+        ? row.evidence as ScoreEvidence[]
+        : [];
       if (existing) {
         const merged: DimensionScores = { ...existing.dimensionScores };
         for (const [k, v] of Object.entries(rowScores)) {
@@ -375,11 +337,13 @@ export class ArticleService {
         grouped.set(dir, {
           totalScore: Math.max(existing.totalScore, row.totalScore),
           dimensionScores: merged,
+          evidence: [...existing.evidence, ...rowEvidence],
         });
       } else {
         grouped.set(dir, {
           totalScore: row.totalScore,
           dimensionScores: { ...rowScores },
+          evidence: rowEvidence,
         });
       }
     }
@@ -390,6 +354,7 @@ export class ArticleService {
         direction: dir,
         totalScore: data?.totalScore ?? 0,
         dimensionScores: data?.dimensionScores ?? {},
+        evidence: data?.evidence ?? [],
       };
     });
 

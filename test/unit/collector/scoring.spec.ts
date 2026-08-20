@@ -23,10 +23,11 @@ describe('AI scoring capability configuration', () => {
         resolve(process.cwd(), 'server/capabilities/ai_article_scoring_1.json'),
         'utf8',
       ),
-    ) as { formValue: { prompt: string } };
+    ) as { formValue: { prompt: string; jsonStructure: Array<{ name: string }> } };
 
     expect(capability.formValue.prompt).toContain('model: {entity,capability');
     expect(capability.formValue.prompt).toContain('business_ecosystem: {business_fact');
+    expect(capability.formValue.jsonStructure.map((field) => field.name)).toContain('evidence');
   });
 });
 
@@ -130,7 +131,7 @@ describe('nine direction scorecards', () => {
     };
 
     expect(result.primaryDirection).toBe('model');
-    expect(result.directionScores.model.normalizedScore).toBeGreaterThan(12);
+    expect(result.directionScores.model.normalizedScore).toBeGreaterThan(0);
   });
 
   it('caps publish score without strong multi-dimension evidence', () => {
@@ -282,7 +283,7 @@ describe('AiScoringService ruleBasedScoreArticle - direction classification', ()
 });
 
 describe('AiScoringService AI scoring - nine direction dimensions', () => {
-  it('uses direct applications dimensions from the AI plugin response', async () => {
+  it('degrades unsupported direct applications dimensions from the AI plugin response', async () => {
     const pluginOutput = {
       summary: '某车企把智能座舱助手部署到量产车型。',
       scores: {
@@ -390,12 +391,11 @@ describe('AiScoringService AI scoring - nine direction dimensions', () => {
       'signal',
     );
 
-    expect(result.aiProcessed).toBe(true);
-    expect(result.primaryDirection).toBe('applications');
-    expect(result.directionScores.applications.dimensionScores.industry).toBe(
-      5,
-    );
-    expect(result.directionScores.applications.normalizedScore).toBe(40);
+    expect(result.aiProcessed).toBe(false);
+    expect(result.primaryDirection).toBeNull();
+    expect(result.directionScores.applications.dimensionScores.industry).toBe(0);
+    expect(result.directionScores.applications.normalizedScore).toBeLessThan(40);
+    expect(result.degradeReason).toContain('complete text-grounded evidence chain');
     expect(load).toHaveBeenCalledWith('ai_article_scoring_1');
     expect(call).toHaveBeenCalledWith(
       'textToJson',
@@ -405,7 +405,7 @@ describe('AiScoringService AI scoring - nine direction dimensions', () => {
     );
   });
 
-  it('keeps legacy eight-direction plugin output compatible', async () => {
+  it('degrades legacy score-only plugin output because it has no evidence chain', async () => {
     const call = jest.fn().mockResolvedValue({
       summary: '兼容旧版输出。',
       scores: {
@@ -431,9 +431,9 @@ describe('AiScoringService AI scoring - nine direction dimensions', () => {
       'authoritative',
     );
 
-    expect(result.aiProcessed).toBe(true);
-    expect(result.primaryDirection).toBe('safety_governance');
-    expect(result.directionScores.safety_governance.normalizedScore).toBe(40);
+    expect(result.aiProcessed).toBe(false);
+    expect(result.primaryDirection).toBeNull();
+    expect(result.degradeReason).toContain('summary is empty, ungrounded, or exceeds 200 characters');
   });
 
   it('degrades when the plugin returns a summary without usable scores', async () => {
@@ -475,7 +475,233 @@ describe('AiScoringService AI scoring - nine direction dimensions', () => {
       'signal',
     );
 
-    expect(result.directionScores.model.dimensionScores.entity).toBe(2.5);
+    expect(result.directionScores.model.dimensionScores.entity).toBe(0);
+  });
+
+  it('accepts a complete, text-grounded application evidence chain', async () => {
+    const title = '某医院已将导诊助手部署到20个科室';
+    const content = '某医院已将导诊助手部署到20个科室，解决患者候诊时间过长的问题。上线后平均候诊时间下降30%。';
+    const service = new (
+      require('../../../server/modules/collector/ai-scoring.service')
+        .AiScoringService
+    )({
+      load: jest.fn().mockReturnValue({
+        call: jest.fn().mockResolvedValue({
+          summary: '某医院部署导诊助手，候诊时间下降30%。',
+          scores: {
+            applications: {
+              industry: 5, business_problem: 5, launch_status: 5,
+              scale: 5, roi: 5, workflow_change: 0,
+              replicability: 0, risk_responsibility: 0,
+            },
+          },
+          evidence: [
+            {
+              direction: 'applications', dimension: 'industry', score: 5,
+              quote: '某医院已将导诊助手部署到20个科室', subject: '某医院',
+              predicate: '部署', object: '导诊助手', certainty: 'fact',
+              fields: { industry: '医院', adopter: '某医院', use_case: '导诊助手' },
+            },
+            {
+              direction: 'applications', dimension: 'business_problem', score: 5,
+              quote: '解决患者候诊时间过长的问题', subject: '患者',
+              predicate: '解决', object: '患者候诊时间过长的问题', certainty: 'fact',
+              fields: { problem: '患者候诊时间过长的问题', baseline: '候诊时间过长' },
+            },
+            {
+              direction: 'applications', dimension: 'launch_status', score: 5,
+              quote: '某医院已将导诊助手部署到20个科室', subject: '某医院',
+              predicate: '部署', object: '导诊助手', certainty: 'fact',
+              fields: { status: 'deployed', adopter: '某医院', environment: '20个科室' },
+            },
+            {
+              direction: 'applications', dimension: 'scale', score: 5,
+              quote: '某医院已将导诊助手部署到20个科室', subject: '某医院',
+              predicate: '部署', object: '20个科室', certainty: 'fact',
+              fields: { metric: '科室', value: 20, unit: '个', period: '部署' },
+            },
+            {
+              direction: 'applications', dimension: 'roi', score: 5,
+              quote: '上线后平均候诊时间下降30%', subject: '平均候诊时间',
+              predicate: '下降', object: '30%', certainty: 'fact',
+              fields: { metric: '平均候诊时间', value: 30, unit: '%', baseline: '上线后' },
+            },
+          ],
+        }),
+      }),
+    });
+
+    const result = await service.scoreArticle(title, content, 'authoritative');
+
+    expect(result.primaryDirection).toBe('applications');
+    expect(result.directionScores.applications.dimensionScores.roi).toBe(5);
+    expect(result.directionScores.applications.normalizedScore).toBeGreaterThan(20);
+  });
+
+  it('rejects invented quotes and caps planned deployment evidence', async () => {
+    const service = new (
+      require('../../../server/modules/collector/ai-scoring.service')
+        .AiScoringService
+    )({
+      load: jest.fn().mockReturnValue({
+        call: jest.fn().mockResolvedValue({
+          summary: '厂商计划展示医疗助手。',
+          scores: {
+            applications: {
+              industry: 5, business_problem: 5, launch_status: 5,
+              scale: 0, roi: 0, workflow_change: 0,
+              replicability: 0, risk_responsibility: 0,
+            },
+          },
+          evidence: [
+            {
+              direction: 'applications', dimension: 'industry', score: 5,
+              quote: '某医院已经部署到100家门店', subject: '某医院',
+              predicate: '部署', object: '助手', certainty: 'fact',
+              fields: { industry: '医疗', adopter: '某医院' },
+            },
+            {
+              direction: 'applications', dimension: 'launch_status', score: 5,
+              quote: '厂商计划展示医疗助手', subject: '厂商',
+              predicate: '计划展示', object: '医疗助手', certainty: 'planned',
+              fields: { status: 'planned', date: '未来' },
+            },
+          ],
+        }),
+      }),
+    });
+
+    const result = await service.scoreArticle(
+      '医疗助手计划发布',
+      '厂商计划展示医疗助手，尚未开始客户试点。',
+      'signal',
+    );
+
+    expect(result.primaryDirection).toBeNull();
+    expect(result.directionScores.applications.dimensionScores.industry).toBe(0);
+    expect(result.directionScores.applications.dimensionScores.launch_status).toBe(2.5);
+    expect(result.aiProcessed).toBe(false);
+  });
+
+  it('caps full scores whose structured facts are not present in the quote', async () => {
+    const title = 'OpenAI 发布 GPT-5';
+    const content = 'OpenAI 发布 GPT-5，并表示模型在推理任务上有所提升。';
+    const service = new (
+      require('../../../server/modules/collector/ai-scoring.service')
+        .AiScoringService
+    )({
+      load: jest.fn().mockReturnValue({
+        call: jest.fn().mockResolvedValue({
+          summary: 'OpenAI 发布 GPT-5。',
+          scores: {
+            model: { entity: 5, capability: 5, performance: 5 },
+          },
+          evidence: [
+            {
+              direction: 'model', dimension: 'entity', score: 5,
+              quote: 'OpenAI 发布 GPT-5', subject: 'OpenAI', predicate: '发布', object: 'GPT-5',
+              certainty: 'fact', fields: { model_name: 'GPT-5', provider: 'OpenAI' },
+            },
+            {
+              direction: 'model', dimension: 'capability', score: 5,
+              quote: '模型在推理任务上有所提升', subject: '模型', predicate: '提升', object: '推理任务',
+              certainty: 'fact', fields: { task: '推理任务', capability_change: '提升' },
+            },
+            {
+              direction: 'model', dimension: 'performance', score: 5,
+              quote: '模型在推理任务上有所提升', subject: '模型', predicate: '提升', object: '推理任务',
+              certainty: 'fact', fields: { metric: 'MMLU', value: 95, unit: '%' },
+            },
+          ],
+        }),
+      }),
+    });
+
+    const result = await service.scoreArticle(title, content, 'authoritative');
+
+    expect(result.directionScores.model.dimensionScores.entity).toBe(5);
+    // The model cannot use the made-up performance field to prove its claim;
+    // the score remains tied to its own actual quote tuple.
+    expect(result.directionScores.model.dimensionScores.performance).toBe(2.5);
+    expect(result.primaryDirection).toBeNull();
+  });
+
+  it.each([
+    [
+      'multimodal',
+      '图像到视频生成',
+      '该产品接收图像输入并生成视频，延迟为 120 ms。',
+      ['modality_coverage', 'io_capability', 'realtime'],
+      [
+        { dimension: 'modality_coverage', quote: '接收图像输入并生成视频', subject: '图像输入', predicate: '生成', object: '视频', fields: { modalities: ['图像', '视频'], operation: '生成视频' } },
+        { dimension: 'io_capability', quote: '接收图像输入并生成视频', subject: '图像输入', predicate: '生成', object: '视频', fields: { input_modality: '图像', output_modality: '视频', operation: '生成' } },
+        { dimension: 'realtime', quote: '延迟为 120 ms', subject: '延迟', predicate: '为', object: '120 ms', fields: { metric: '延迟', value: 120, unit: 'ms', mode: '延迟' } },
+      ],
+    ],
+    [
+      'infrastructure',
+      '云端推理集群',
+      '云服务商为模型推理部署 GPU 集群，模型推理吞吐达到 1000 tokens/s，vLLM 优化模型推理。',
+      ['cloud', 'performance', 'software_stack'],
+      [
+        { dimension: 'cloud', quote: '云服务商为模型推理部署 GPU 集群', subject: '云服务商', predicate: '部署', object: 'GPU 集群', fields: { provider: '云服务商', service: '模型推理', capacity: 'GPU 集群' } },
+        { dimension: 'performance', quote: '模型推理吞吐达到 1000 tokens/s', subject: '模型推理', predicate: '达到', object: '1000 tokens/s', fields: { metric: '吞吐', value: 1000, unit: 'tokens/s', workload: '模型推理' } },
+        { dimension: 'software_stack', quote: 'vLLM 优化模型推理', subject: 'vLLM', predicate: '优化', object: '模型推理', fields: { package: 'vLLM', optimization: '优化', workload: '模型推理' } },
+      ],
+    ],
+    [
+      'data_eval',
+      '评测协议发布',
+      '研究团队发布 EvalSet v1 数据集，EvalSet v1 覆盖 20 个任务，并公开评测协议和 MIT 许可证。',
+      ['data_asset', 'coverage', 'methodology'],
+      [
+        { dimension: 'data_asset', quote: '研究团队发布 EvalSet v1 数据集', subject: '研究团队', predicate: '发布', object: 'EvalSet v1 数据集', fields: { asset_name: 'EvalSet v1', version: 'v1' } },
+        { dimension: 'coverage', quote: 'EvalSet v1 覆盖 20 个任务', subject: 'EvalSet v1', predicate: '覆盖', object: '20 个任务', fields: { scope: '任务', count: 20 } },
+        { dimension: 'methodology', quote: '公开评测协议', subject: '评测协议', predicate: '公开', object: '评测协议', fields: { protocol: '评测协议', metric: '公开', baseline: '评测协议' } },
+      ],
+    ],
+    [
+      'safety_governance',
+      '提示注入防护',
+      '红队发现提示注入可导致访问控制越权，团队针对提示注入部署沙箱控制，并完成审计测试。',
+      ['risk_type', 'controls', 'verification'],
+      [
+        { dimension: 'risk_type', quote: '提示注入可导致访问控制越权', subject: '提示注入', predicate: '导致', object: '访问控制越权', fields: { risk_class: '提示注入', target_system: '访问控制', harm: '越权' } },
+        { dimension: 'controls', quote: '针对提示注入部署沙箱控制', subject: '提示注入', predicate: '部署', object: '沙箱控制', fields: { control_type: '沙箱控制', threat: '提示注入', scope: '沙箱控制' } },
+        { dimension: 'verification', quote: '完成审计测试', subject: '审计测试', predicate: '完成', object: '审计测试', fields: { method: '审计测试', result: '完成', date: '完成' } },
+      ],
+    ],
+    [
+      'business_ecosystem',
+      '融资与战略合作',
+      '公司完成 5000 万美元融资，并与云服务商签署战略合作协议。',
+      ['business_fact', 'strategy', 'signal'],
+      [
+        { dimension: 'business_fact', quote: '公司完成 5000 万美元融资', subject: '公司', predicate: '完成', object: '5000 万美元融资', fields: { event_type: '融资', parties: '公司', amount: '5000 万美元', status: 'completed' } },
+        { dimension: 'strategy', quote: '与云服务商签署战略合作协议', subject: '云服务商', predicate: '签署', object: '战略合作协议', fields: { action: '签署', counterpart: '云服务商', scope: '战略合作协议', status: 'signed' } },
+        { dimension: 'signal', quote: '与云服务商签署战略合作协议', subject: '云服务商', predicate: '签署', object: '战略合作协议', fields: { signal_type: '合作', parties: '云服务商', status: 'signed', scope: '战略合作协议' } },
+      ],
+    ],
+  ])('accepts a complete %s evidence chain', async (direction, title, content, dimensions, entries) => {
+    const scores = Object.fromEntries(dimensions.map((dimension) => [dimension, 5]));
+    const evidence = entries.map((entry) => ({
+      direction,
+      score: 5,
+      certainty: 'fact',
+      ...entry,
+    }));
+    const service = new (
+      require('../../../server/modules/collector/ai-scoring.service')
+        .AiScoringService
+    )({
+      load: jest.fn().mockReturnValue({
+        call: jest.fn().mockResolvedValue({ summary: title, scores: { [direction]: scores }, evidence }),
+      }),
+    });
+
+    const result = await service.scoreArticle(title, content, 'authoritative');
+    expect(result.primaryDirection).toBe(direction);
+    expect(result.directionScores[direction].hasClearEvidence).toBe(true);
   });
 
   it('allows strong signal-source evidence to reach the default threshold', () => {

@@ -1,4 +1,9 @@
-import { getOriginPolicy } from '../../../server/modules/collector/trace-engine';
+import {
+  getOriginPolicy,
+  validateUrlSyntax,
+  traceOriginFromContent,
+  probeSafeLink,
+} from '../../../server/modules/collector/trace-engine';
 
 describe('getOriginPolicy', () => {
   it('does not treat a signal-tier editorial publication as an aggregator', () => {
@@ -39,5 +44,48 @@ describe('getOriginPolicy', () => {
       sourceUrl: 'https://plink.anyfeeder.com/weixin/example',
       sourceName: 'Custom bridge',
     })).toBe('editorial');
+  });
+});
+
+describe('trace SSRF safety', () => {
+  it('rejects local, metadata, userinfo, mapped IPv6, and dangerous-port URLs', () => {
+    for (const url of [
+      'http://localhost/admin',
+      'http://127.0.0.1:8080/admin',
+      'http://169.254.169.254/latest/meta-data',
+      'http://user:pass@example.com/article',
+      'http://[::ffff:127.0.0.1]/article',
+      'http://example.com:6379/article',
+    ]) {
+      expect(validateUrlSyntax(url).safe).toBe(false);
+    }
+  });
+
+  it('fails closed when only unsafe candidates are present', async () => {
+    const result = await traceOriginFromContent(
+      'https://aggregator.example/feed/item',
+      '<link rel="canonical" href="http://127.0.0.1:8080/internal">',
+      'https://aggregator.example/feed',
+    );
+    expect(result.status).toBe('needs_review');
+    expect(result.originalUrl).toBeNull();
+  });
+
+  it('does not probe local or metadata addresses', async () => {
+    await expect(probeSafeLink('http://localhost:8080/')).resolves.toMatchObject({
+      state: 'needs_review',
+    });
+    await expect(probeSafeLink('http://169.254.169.254/latest/meta-data')).resolves.toMatchObject({
+      state: 'needs_review',
+    });
+  });
+
+  it('does not treat a body link as a verified origin', async () => {
+    const result = await traceOriginFromContent(
+      'https://aggregator.example/feed/item',
+      'Read more at https://127.0.0.1/article',
+      'https://aggregator.example/feed',
+    );
+    expect(result.status).toBe('needs_review');
   });
 });

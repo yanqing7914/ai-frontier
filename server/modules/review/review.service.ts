@@ -117,6 +117,21 @@ export class ReviewService {
       .set({ status: articleStatus })
       .where(eq(article.id, item.articleId));
 
+    if (action === 'approve') {
+      // Approval is an explicit provenance audit. Keep the original trace for
+      // auditability, but allow the publish gate to release this reviewed item.
+      await this.db.update(article).set({
+        provenanceOverride: true,
+        provenanceAuditedAt: new Date(),
+        originEvidence: note ? `manual_review_approved: ${note}` : 'manual_review_approved',
+      }).where(eq(article.id, item.articleId));
+    } else {
+      await this.db.update(article).set({
+        provenanceOverride: false,
+        provenanceAuditedAt: new Date(),
+      }).where(eq(article.id, item.articleId));
+    }
+
     return { id, status: newStatus };
   }
 }

@@ -1,8 +1,32 @@
-import { hasCoreEvidence, canPublishArticle, aggregateDirectionScores } from '../../../server/modules/collector/publish-gate';
+import {
+  hasCoreEvidence,
+  hasVerifiedPrimaryEvidence,
+  canPublishArticle,
+  aggregateDirectionScores,
+} from '../../../server/modules/collector/publish-gate';
+import type { ScoreEvidence } from '../../../shared/api.interface';
+
+const modelEvidence: ScoreEvidence[] = [
+  {
+    direction: 'model', dimension: 'entity', score: 5,
+    quote: 'OpenAI 发布 GPT-5。', subject: 'OpenAI', predicate: '发布', object: 'GPT-5',
+    certainty: 'fact', fields: { model_name: 'GPT-5', provider: 'OpenAI' },
+  },
+  {
+    direction: 'model', dimension: 'capability', score: 5,
+    quote: 'GPT-5 在推理任务上提升。', subject: 'GPT-5', predicate: '提升', object: '推理任务',
+    certainty: 'fact', fields: { task: '推理任务', capability_change: '提升' },
+  },
+  {
+    direction: 'model', dimension: 'performance', score: 5,
+    quote: 'GPT-5 在 MMLU 达到 90%。', subject: 'GPT-5', predicate: '达到', object: '90%',
+    certainty: 'fact', fields: { metric: 'MMLU', value: 90, unit: '%' },
+  },
+];
 
 describe('hasCoreEvidence', () => {
   it('returns true when enough application core dimensions have direct evidence', () => {
-    const scores = { industry: 5, business_problem: 5, roi: 2.5 };
+    const scores = { industry: 5, business_problem: 5, launch_status: 5 };
     expect(hasCoreEvidence(scores, 'applications')).toBe(true);
   });
 
@@ -47,7 +71,7 @@ describe('hasCoreEvidence', () => {
 
   it('requires an application core dimension, not a secondary application detail', () => {
     expect(hasCoreEvidence({ roi: 5, scale: 5 }, 'applications')).toBe(false);
-    expect(hasCoreEvidence({ industry: 5, business_problem: 5, roi: 5 }, 'applications')).toBe(true);
+    expect(hasCoreEvidence({ industry: 5, business_problem: 5, launch_status: 5 }, 'applications')).toBe(true);
   });
 
   it('requires a model identity or capability fact, not an ecosystem detail', () => {
@@ -57,17 +81,17 @@ describe('hasCoreEvidence', () => {
 
   it('requires both model core dimensions instead of a single capability hit', () => {
     expect(hasCoreEvidence({ capability: 5, cost: 2.5 }, 'model')).toBe(false);
-    expect(hasCoreEvidence({ entity: 5, capability: 5, cost: 2.5 }, 'model')).toBe(true);
+    expect(hasCoreEvidence({ entity: 5, capability: 5, cost: 2.5 }, 'model')).toBe(false);
   });
 
   it('requires two application core dimensions, not one strong hit', () => {
     expect(hasCoreEvidence({ industry: 5, scale: 5 }, 'applications')).toBe(false);
-    expect(hasCoreEvidence({ industry: 5, business_problem: 5, roi: 5 }, 'applications')).toBe(true);
+    expect(hasCoreEvidence({ industry: 5, business_problem: 5, launch_status: 5 }, 'applications')).toBe(true);
   });
 
   it('requires enough evidence dimensions to avoid keyword-only scoring', () => {
     expect(hasCoreEvidence({ entity: 5, capability: 5 }, 'model')).toBe(false);
-    expect(hasCoreEvidence({ entity: 5, capability: 5, performance: 2.5 }, 'model')).toBe(true);
+    expect(hasCoreEvidence({ entity: 5, capability: 5, performance: 2.5 }, 'model')).toBe(false);
   });
 });
 
@@ -78,6 +102,9 @@ describe('canPublishArticle', () => {
     status: 'draft',
     dimensionScores: { entity: 5, capability: 5, performance: 5 } as Record<string, number> | null,
     publishThreshold: 75,
+    aiProcessed: true,
+    traceStatus: 'first_party' as const,
+    evidence: modelEvidence,
   };
 
   it('allows publish when all conditions met', () => {
@@ -106,6 +133,9 @@ describe('canPublishArticle', () => {
 
   it('rejects unverified aggregation even when every score requirement passes', () => {
     expect(canPublishArticle({ ...base, traceStatus: 'needs_review' })).toBe(false);
+    expect(canPublishArticle({ ...base, traceStatus: 'aggregator' })).toBe(false);
+    expect(canPublishArticle({ ...base, traceStatus: null })).toBe(false);
+    expect(canPublishArticle({ ...base, traceStatus: 'needs_review', provenanceOverride: true })).toBe(true);
   });
 
   it('allows editorial reporting without a separate original URL', () => {
@@ -139,7 +169,22 @@ describe('canPublishArticle', () => {
       status: 'draft',
       dimensionScores: { business_fact: 5, strategy: 5, signal: 5 },
       publishThreshold: 75,
-    })).toBe(true);
+      aiProcessed: false,
+    })).toBe(false);
+  });
+
+  it('rejects a numeric score when its primary evidence was not persisted', () => {
+    expect(canPublishArticle({ ...base, evidence: [] })).toBe(false);
+  });
+
+  it('rejects a planned or incomplete evidence chain', () => {
+    const planned = modelEvidence.map((item) => ({ ...item }));
+    planned[1] = { ...planned[1], certainty: 'planned', score: 2.5 };
+    expect(hasVerifiedPrimaryEvidence(
+      planned,
+      'model',
+      base.dimensionScores!,
+    )).toBe(false);
   });
 
   it('blocks high score without core evidence in primary direction', () => {
@@ -169,7 +214,7 @@ describe('canPublishArticle', () => {
       status: 'draft',
       dimensionScores: { data_asset: 5, methodology: 5, performance: 5 },
       publishThreshold: 75,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('rejects keyword-only evidence in the primary direction', () => {
@@ -186,7 +231,7 @@ describe('canPublishArticle', () => {
       status: 'draft',
       dimensionScores: { entity: 5, capability: 5, performance: 5 },
       publishThreshold: 75,
-    })).toBe(true);
+    })).toBe(false);
   });
 });
 

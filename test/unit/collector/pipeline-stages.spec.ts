@@ -162,9 +162,9 @@ describe('normalizeUrlForDedup', () => {
       .toBe('https://example.com/page?id=1');
   });
 
-  it('strips trailing punctuation', () => {
-    expect(normalizeUrlForDedup('https://example.com/page.')).toBe('https://example.com/page');
-    expect(normalizeUrlForDedup('https://example.com/page)')).toBe('https://example.com/page');
+  it('preserves legal trailing URL punctuation', () => {
+    expect(normalizeUrlForDedup('https://example.com/page.')).toBe('https://example.com/page.');
+    expect(normalizeUrlForDedup('https://example.com/page)')).toBe('https://example.com/page)');
   });
 
   it('produces consistent output for equivalent URLs', () => {
@@ -184,6 +184,7 @@ describe('decodeEntities', () => {
   it('decodes numeric entities', () => {
     expect(decodeEntities('&#65;')).toBe('A');
     expect(decodeEntities('&#x41;')).toBe('A');
+    expect(decodeEntities('&#128512;')).toBe('😀');
   });
 });
 
@@ -196,6 +197,11 @@ describe('cleanContent', () => {
   it('handles empty input', () => {
     expect(cleanContent('')).toBe('');
     expect(cleanContent('<div></div>')).toBe('');
+  });
+
+  it('removes executable and inert HTML content before extracting text', () => {
+    expect(cleanContent('<p>Visible</p><script>alert(1)</script><style>.x{}</style><template>Hidden</template>'))
+      .toBe('Visible');
   });
 });
 
@@ -238,10 +244,10 @@ describe('normalizeItems', () => {
 
   it('uses normalized URL for content hash', () => {
     const r1 = normalizeItems([
-      { title: 'T', url: 'https://example.com/page?utm_source=x', publishedAt: null, content: '', rawContent: '' },
+      { title: 'T', url: 'https://example.com/page?utm_source=x', publishedAt: null, content: 'Body', rawContent: '' },
     ], meta);
     const r2 = normalizeItems([
-      { title: 'T', url: 'https://example.com/page', publishedAt: null, content: '', rawContent: '' },
+      { title: 'T', url: 'https://example.com/page', publishedAt: null, content: 'Body', rawContent: '' },
     ], meta);
     expect(r1.items[0].contentHash).toBe(r2.items[0].contentHash);
   });
@@ -260,6 +266,34 @@ describe('normalizeItems', () => {
     ], meta);
     expect(result.items).toHaveLength(0);
     expect(result.dropReasons.missingUrl).toBe(1);
+  });
+
+  it('normalizes title and canonical URL before computing a stable dedup hash', () => {
+    const result = normalizeItems([
+      {
+        title: '  AI&#x200B; Update  ',
+        url: 'https://example.com/original?utm_source=feed',
+        canonicalUrl: 'https://example.com/canonical?utm_campaign=feed',
+        publishedAt: new Date('invalid'),
+        content: '<p>Body</p>',
+        rawContent: '',
+      },
+    ], meta);
+    expect(result.items[0].title).toBe('AI Update');
+    expect(result.items[0].canonicalUrl).toBe('https://example.com/canonical?utm_campaign=feed');
+    expect(result.items[0].dedupUrl).toBe('https://example.com/canonical');
+    expect(result.items[0].publishedAt).toBeNull();
+    expect(result.items[0].contentHash).toBe(computeContentHash('AI Update', 'https://example.com/canonical'));
+  });
+
+  it('drops non-http URLs and missing bodies instead of using the title as content', () => {
+    const result = normalizeItems([
+      { title: 'Unsafe', url: 'javascript:alert(1)', publishedAt: null, content: 'Body', rawContent: '' },
+      { title: 'No body', url: 'https://example.com/no-body', publishedAt: null, content: '', rawContent: '', contentStatus: 'missing' },
+    ], meta);
+    expect(result.items).toHaveLength(0);
+    expect(result.dropReasons.invalidUrl).toBe(1);
+    expect(result.dropReasons.missingContent).toBe(1);
   });
 });
 

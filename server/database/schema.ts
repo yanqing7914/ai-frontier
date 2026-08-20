@@ -227,6 +227,7 @@ export const qualityGate = pgTable("quality_gate", {
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
 }, (table) => [
   index("idx_quality_gate_article_id").on(table.articleId),
+  uniqueIndex("quality_gate_article_reason_key").on(table.articleId, table.reason),
   foreignKey({
     columns: [table.articleId],
     foreignColumns: [article.id],
@@ -242,6 +243,10 @@ export const directionScore = pgTable("direction_score", {
    * @type Record<string, number>
    */
   dimensionScores: jsonb("dimension_scores").notNull().default('{}'),
+  /**
+   * @type import('../../shared/api.interface').ScoreEvidence[]
+   */
+  evidence: jsonb("evidence").notNull().default('[]'),
   totalScore: integer("total_score").notNull().default(0),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -267,10 +272,20 @@ export const article = pgTable("article", {
   title: varchar("title", { length: 500 }).notNull(),
   url: varchar("url", { length: 2048 }).notNull(),
   originalUrl: varchar("original_url", { length: 2048 }),
+  // Raw/canonical URLs stay available for audit; dedupUrl is the stable identity.
+  // This remains nullable so adding the field does not rewrite historical rows.
+  canonicalUrl: varchar("canonical_url", { length: 2048 }),
+  dedupUrl: varchar("dedup_url", { length: 2048 }),
   originStatus: varchar("origin_status", { length: 50 }),
   originEvidence: text("origin_evidence"),
   originConfidence: integer("origin_confidence"),
+  // Manual review may explicitly override an unresolved provenance trace.
+  provenanceOverride: boolean("provenance_override").notNull().default(false),
+  provenanceAuditedAt: customTimestamptz("provenance_audited_at", { precision: 3 }),
   contentHash: varchar("content_hash", { length: 64 }).notNull(),
+  // Immutable normalized title + source body used for every AI scoring call.
+  // It is intentionally separate from the editorial summary.
+  scoringInput: text("scoring_input"),
   summary: text("summary"),
   sourceName: varchar("source_name", { length: 255 }).notNull(),
   feedSourceId: uuid("feed_source_id"),
@@ -298,6 +313,9 @@ export const article = pgTable("article", {
   index("idx_article_status").on(table.status),
   // The collector relies on this constraint for atomic ON CONFLICT deduplication.
   uniqueIndex("article_content_hash_key").on(table.contentHash),
+  // New collector writes always provide this value. Existing rows stay NULL until
+  // an explicit, reviewed backfill is run; no history migration runs implicitly.
+  uniqueIndex("article_dedup_url_key").on(table.dedupUrl),
   index("idx_article_cluster_id").on(table.clusterId),
   index("idx_article_primary_direction").on(table.primaryDirection),
   foreignKey({
@@ -340,7 +358,12 @@ export const feedSource = pgTable("feed_source", {
   // System field: Updater (auto-filled, do not modify)
   updatedBy: userProfile("_updated_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
-});
+}, (table) => [
+  // Canonical feed URLs are the concurrency-safe identity of a source.
+  uniqueIndex("feed_source_url_key").on(table.url),
+  index("idx_feed_source_eligible").on(table.enabled, table.nextFetchAt),
+  index("idx_feed_source_category_id").on(table.sourceCategoryId),
+]);
 
 // table aliases
 export const appConfigTable = appConfig;

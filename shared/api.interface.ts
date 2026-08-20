@@ -154,9 +154,31 @@ export interface DirectionScoreItem {
   direction: Direction;
   totalScore: number;
   dimensionScores: DimensionScores;
+  /** Original-text facts accepted by the scorer for this direction. */
+  evidence: ScoreEvidence[];
 }
 
 export type DimensionScores = Record<string, number>;
+
+export type EvidenceCertainty =
+  | 'fact'
+  | 'announced'
+  | 'planned'
+  | 'claimed'
+  | 'rumor';
+
+export interface ScoreEvidence {
+  direction: Direction;
+  dimension: string;
+  score: number;
+  quote: string;
+  subject: string;
+  predicate: string;
+  object: string;
+  certainty: EvidenceCertainty;
+  status?: string;
+  fields: Record<string, unknown>;
+}
 
 export interface QualityGateItem {
   id: string;

@@ -29,6 +29,7 @@ import {
 import type {
   WorkbenchArticleItem,
   DirectionScoreItem,
+  ScoreEvidence,
   ArticleStatus,
   Direction,
   ExcludeReason,
@@ -202,7 +203,7 @@ function ScorePanel({ articleId }: ScorePanelProps) {
   }
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-4">
       {scores.map((score: DirectionScoreItem) => {
         const dir = getDirectionConfig(score.direction);
         const policy = getDirectionScoringPolicy(score.direction);
@@ -226,10 +227,7 @@ function ScorePanel({ articleId }: ScorePanelProps) {
             </div>
             {policy && (
               <p className="mb-2 text-[10px] leading-4 text-muted-foreground">
-                核心证据：{policy.coreDimensions.map(
-                  (key) => DIMENSION_LABELS[key] ?? key,
-                ).join(' / ')}；至少 {policy.minCoreEvidence} 项明确，
-                共 {policy.minEvidenceDimensions} 项有证据
+                准入标准：{policy.eligibilitySummary}
               </p>
             )}
             <div className="space-y-1.5">
@@ -261,9 +259,43 @@ function ScorePanel({ articleId }: ScorePanelProps) {
                 ),
               )}
             </div>
+            <ScoreEvidenceList evidence={score.evidence} />
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ScoreEvidenceList({ evidence }: { evidence: ScoreEvidence[] }) {
+  const verified = evidence.filter((item) => item.score > 0);
+  if (verified.length === 0) {
+    return (
+      <p className="mt-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
+        暂无 AI 原文证据；该方向仅供人工复核，不能自动发布。
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 space-y-2 border-t border-border pt-2">
+      <p className="text-[10px] font-medium text-foreground">
+        已验证原文依据（{verified.length}）
+      </p>
+      {verified.map((item, index) => (
+        <div key={`${item.dimension}-${index}`} className="rounded-sm bg-accent/60 p-2">
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="font-medium text-foreground">
+              {DIMENSION_LABELS[item.dimension] ?? item.dimension} · {item.score} 分
+            </span>
+            <span className="shrink-0 text-muted-foreground">
+              {item.certainty === 'fact' ? '已发生事实' : item.certainty}
+            </span>
+          </div>
+          <blockquote className="mt-1 border-l-2 border-primary/40 pl-2 text-[10px] leading-4 text-muted-foreground">
+            “{item.quote}”
+          </blockquote>
+        </div>
+      ))}
     </div>
   );
 }

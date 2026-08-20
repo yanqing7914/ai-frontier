@@ -11,11 +11,17 @@ import {
   MAX_DIRECTION_SCORE,
   DIMENSION_FULL,
   DIMENSION_HALF,
+  getDirectionEvidenceRequirement,
   getDirectionScoringPolicy,
+  hasSufficientDirectionEvidence,
   type Direction,
   type DirectionMeta,
 } from '@shared/directions';
-import type { DimensionScores } from '@shared/api.interface';
+import type {
+  DimensionScores,
+  EvidenceCertainty,
+  ScoreEvidence,
+} from '@shared/api.interface';
 
 const SCORING_PLUGIN_INSTANCE_ID = 'ai_article_scoring_1';
 const SCORING_ACTION_KEY = 'textToJson';
@@ -34,6 +40,9 @@ type AiDirectionScores = Partial<
   Record<Direction | AiPluginDirection, Record<string, unknown>>
 >;
 
+/** A text-grounded fact proposed by the AI scorer for one dimension. */
+export type ScoringEvidence = ScoreEvidence;
+
 const AI_PLUGIN_TO_NEW: Record<AiPluginDirection, Direction> = {
   model: 'model',
   agent: 'agent',
@@ -49,6 +58,26 @@ export interface DirectionEvidence {
   normalizedScore: number;
   hasClearEvidence: boolean;
   dimensionScores: DimensionScores;
+  evidenceByDimension?: Record<string, ScoringEvidence[]>;
+}
+
+export interface ClassificationCandidate {
+  direction: Direction;
+  score: number;
+  eligible: boolean;
+  dimensionScores: DimensionScores;
+  matchedDimensions: string[];
+  evidence: string[];
+}
+
+export interface ArticleClassificationResult {
+  primaryDirection: Direction | null;
+  /** Directions with a complete, direction-specific editorial story. */
+  evidence: string[];
+  candidates: ClassificationCandidate[];
+  ambiguous: boolean;
+  status: 'classified' | 'ambiguous' | 'no_match' | 'degraded';
+  degradeReason: string | null;
 }
 
 interface GenericQualityScore {
@@ -68,6 +97,15 @@ export interface ArticleScoringResult {
   coreEvidencePassed: boolean;
   aiProcessed: boolean;
   degradeReason: string | null;
+}
+
+/** Build the immutable, text-grounded input sent to the scoring provider. */
+export function buildScoringInput(title: string, content: string): string {
+  // Preserve punctuation and spacing inside the source body: evidence quotes
+  // must remain byte-for-byte traceable after a rescore.
+  const normalizedTitle = String(title || '').trim();
+  const normalizedContent = String(content || '').trim();
+  return [`标题：${normalizedTitle}`, `正文：${normalizedContent}`].join('\n');
 }
 
 const SOURCE_TIER_POINTS: Record<string, number> = {
@@ -134,6 +172,7 @@ function buildDirectionPatterns(): Record<
       entity: mk(
         [
           /(?:gpt|claude|gemini|llama|qwen|deepseek|mistral|phi|gemma)[-_ ]?\d/i,
+          /(?:通义千问|豆包|文心一言|智谱(?:清言|GLM)|混元|盘古|百川|讯飞星火|Kimi)[-_ ]?\d*/i,
           versionRe,
         ],
         [
@@ -148,7 +187,7 @@ function buildDirectionPatterns(): Record<
       capability: mk(
         [
           percentRe,
-          /outperform|surpass|achieve|state.of.the.art|sota/i,
+          /outperform|surpass|achieve|state.of.the.art|sota|(?:准确率|性能|得分|胜率|提升|超过).{0,16}\d+(?:%|分)?/i,
           benchmarkRe,
         ],
         ['capability', 'ability', '能力', '性能', 'improvement', '提升'],
@@ -190,15 +229,15 @@ function buildDirectionPatterns(): Record<
     agent: {
       task_boundary: mk(
         [
-          /multi[- ]?step|complex\s+task|end[- ]?to[- ]?end/i,
-          /(?:plan|reason|execute).{0,20}(?:autonom|independ)/i,
+          /multi[- ]?step|complex\s+task|end[- ]?to[- ]?end|多步骤|端到端|自主执行|任务规划/i,
+          /(?:plan|reason|execute).{0,20}(?:autonom|independ)|(?:规划|执行).{0,12}(?:自主|独立)/i,
         ],
         ['task', 'autonomous', 'planning', '任务', '自主', '规划'],
       ),
       tool_call: mk(
         [
-          /function\s+call|tool[- ]?(?:use|call)|mcp|a2a/i,
-          /(?:api|browser|terminal|database).{0,10}(?:tool|access)/i,
+          /function\s+call|tool[- ]?(?:use|call)|mcp|a2a|函数调用|工具调用|调用工具/i,
+          /(?:api|browser|terminal|database).{0,10}(?:tool|access)|(?:浏览器|终端|数据库).{0,10}(?:访问|调用)/i,
         ],
         ['tool', 'function calling', '工具', '调用', 'api'],
       ),
@@ -211,7 +250,7 @@ function buildDirectionPatterns(): Record<
       ),
       orchestration: mk(
         [
-          /multi[- ]?agent|workflow|orchestrat|coordinat/i,
+          /multi[- ]?agent|workflow|orchestrat|coordinat|多智能体|工作流编排|协同/i,
           /(?:agent|node).{0,10}(?:graph|chain|pipeline)/i,
         ],
         ['multi-agent', 'orchestration', 'workflow', '编排', '工作流'],
@@ -225,7 +264,7 @@ function buildDirectionPatterns(): Record<
       ),
       production: mk(
         [
-          /production|enterprise|deploy|reliab|guardrail/i,
+          /production|enterprise|deploy|reliab|guardrail|正式上线|已上线|生产环境/i,
           /(?:human|operator).{0,10}(?:loop|override|review)/i,
         ],
         ['production', 'enterprise', 'reliable', '生产', '企业', '可靠'],
@@ -238,6 +277,7 @@ function buildDirectionPatterns(): Record<
         [
           /enterprise|business.{0,10}(?:process|workflow)|crm|erp/i,
           /(?:automat|integrat).{0,15}(?:workflow|process)/i,
+          /(?:企业|业务).{0,10}(?:流程|工作流)|(?:自动化|集成).{0,15}(?:工作流|流程)/,
         ],
         ['workflow', 'enterprise', 'business', '企业工作流', '自动化'],
       ),
@@ -303,22 +343,22 @@ function buildDirectionPatterns(): Record<
     coding: {
       code_gen: mk(
         [
-          /code\s+generat|copilot|autocomplet|code\s+assist/i,
+          /code\s+generat|copilot|autocomplet|code\s+assist|代码生成|代码补全|编程助手/i,
           /(?:function|class|module).{0,10}(?:generat|complet|suggest)/i,
         ],
         ['code generation', 'coding', '代码生成', '编程'],
       ),
       repo_understanding: mk(
         [
-          /repo|repository|codebase|cross[- ]?file|project[- ]?(?:level|wide)/i,
-          /(?:understand|analyz|index).{0,10}(?:code|repo)/i,
+          /repo|repository|codebase|cross[- ]?file|project[- ]?(?:level|wide)|代码库|仓库理解/i,
+          /(?:understand|analyz|index).{0,10}(?:code|repo)|(?:理解|分析).{0,10}(?:代码库|仓库)/i,
         ],
         ['repository', 'codebase', '仓库', '代码库', '理解'],
       ),
       engineering: mk(
         [
-          /(?:refactor|debug|fix|test|migrate|deploy).{0,10}(?:code|bug|issue)/i,
-          /(?:ci|cd|pipeline|build).{0,10}(?:automat|integrat)/i,
+          /(?:refactor|debug|fix|test|migrate|deploy).{0,10}(?:code|bug|issue)|(?:重构|调试|修复|迁移|部署).{0,10}(?:代码|缺陷|工程)/i,
+          /(?:ci|cd|pipeline|build).{0,10}(?:automat|integrat)|(?:自动|完成).{0,10}(?:修复|重构|测试|部署)/i,
         ],
         ['engineering', 'debug', 'refactor', '工程', '调试', '重构'],
       ),
@@ -475,6 +515,8 @@ function buildDirectionPatterns(): Record<
         [
           /(?:jailbreak|prompt.injection|red.team|adversarial|attack|misuse)/i,
           /(?:hallucinat|bias|toxic|misinfo|deepfake).{0,10}(?:risk|threat|concern)/i,
+          /(?:privacy|copyright|intellectual.property).{0,16}(?:risk|threat|concern|dispute|issue)/i,
+          /(?:提示注入|越狱|幻觉|偏见|隐私|版权).{0,16}(?:风险|威胁|争议|问题)/,
         ],
         ['risk', 'threat', 'vulnerability', '风险', '威胁'],
       ),
@@ -540,6 +582,8 @@ function buildDirectionPatterns(): Record<
         [
           /(?:problem|challenge|pain.point|use.case).{0,10}(?:solv|address|tackl)/i,
           /(?:automat|optimiz|improv|reduc).{0,15}(?:process|cost|time|effort)/i,
+          /(?:robotaxi|autonomous.driving|logistics).{0,30}(?:automat|service|deploy)/i,
+          /(?:自动驾驶|机器人出租车|物流).{0,30}(?:自动化|服务|部署|落地)/,
         ],
         ['problem', 'solution', 'challenge', '问题', '解决方案'],
       ),
@@ -664,9 +708,10 @@ export class AiScoringService {
     title: string,
     content: string,
     sourceTier: string,
+    immutableScoringInput?: string,
   ): Promise<ArticleScoringResult> {
     try {
-      return await this.llmScore(title, content, sourceTier);
+      return await this.llmScore(title, content, sourceTier, immutableScoringInput);
     } catch (error: unknown) {
       const errType =
         error instanceof Error ? error.constructor.name : typeof error;
@@ -697,24 +742,56 @@ export class AiScoringService {
     title: string,
     content: string,
     sourceTier: string,
-  ): { primaryDirection: Direction | null; evidence: string[] } {
-    const text = `${title}\n${content}`;
-    const evidence: string[] = [];
-    const directionScores = {} as Record<Direction, DirectionEvidence>;
+  ): ArticleClassificationResult {
+    try {
+      const text = `${title}\n${content}`;
+      const candidates: ClassificationCandidate[] = DIRECTIONS.map((dir) => {
+        const scored = this.scoreDirectionEvidence(dir, text, sourceTier);
+        const eligible = this.hasSufficientDirectionEvidence(
+          scored.dimensionScores,
+          dir.id,
+        );
+        return {
+          direction: dir.id,
+          score: scored.normalizedScore,
+          eligible,
+          dimensionScores: scored.dimensionScores,
+          matchedDimensions: Object.entries(scored.dimensionScores)
+            .filter(([, value]) => value >= DIMENSION_FULL)
+            .map(([dimension]) => dimension),
+          evidence: this.collectClassificationEvidence(text, dir),
+        };
+      }).filter((candidate) => candidate.score > 0);
 
-    for (const dir of DIRECTIONS) {
-      directionScores[dir.id] = this.scoreDirectionEvidence(
-        dir,
-        text,
-        sourceTier,
-      );
-      if (directionScores[dir.id].hasClearEvidence) {
-        evidence.push(dir.id);
-      }
+      const eligible = candidates
+        .filter((candidate) => candidate.eligible)
+        .sort((a, b) => b.score - a.score);
+      const evidence = eligible.map((candidate) => candidate.direction);
+      const top = eligible[0];
+      const runnerUp = eligible[1];
+      const margin = top && runnerUp ? top.score - runnerUp.score : Infinity;
+      const ambiguous = Boolean(top && runnerUp && margin <= 3);
+
+      return {
+        primaryDirection: top && !ambiguous ? top.direction : null,
+        evidence,
+        candidates,
+        ambiguous,
+        status: ambiguous ? 'ambiguous' : top ? 'classified' : 'no_match',
+        degradeReason: null,
+      };
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      this.logger.warn(`Classification degraded for "${title}": ${reason}`);
+      return {
+        primaryDirection: null,
+        evidence: [],
+        candidates: [],
+        ambiguous: false,
+        status: 'degraded',
+        degradeReason: reason,
+      };
     }
-
-    const { primaryDirection } = this.identifyPrimary(directionScores);
-    return { primaryDirection, evidence };
   }
 
   ruleBasedScoreArticle(
@@ -760,14 +837,13 @@ export class AiScoringService {
     title: string,
     content: string,
     sourceTier: string,
+    immutableScoringInput?: string,
   ): Promise<ArticleScoringResult> {
-    const contentExcerpt =
-      content.length > 3000 ? content.slice(0, 3000) : content;
-    const articleText = [
-      `标题：${title}`,
-      `来源层级：${sourceTier}`,
-      `内容：${contentExcerpt}`,
-    ].join('\n');
+    // Rescoring must use the exact persisted source text. Do not replace it
+    // with a summary/title excerpt, otherwise later evidence cannot be traced.
+    const articleText = immutableScoringInput?.trim()
+      ? immutableScoringInput
+      : `${buildScoringInput(title, content)}\n来源层级：${sourceTier}`;
 
     const input: AiArticleScoringOneInput = { article_text: articleText };
     const pluginCall = this.capabilityService.load(SCORING_PLUGIN_INSTANCE_ID);
@@ -778,12 +854,23 @@ export class AiScoringService {
       throw new Error('Invalid AI response: missing summary');
     }
 
-    const text = `${title}\n${content}`;
+    const text = articleText;
+    const evidenceByDirection = this.validateAiEvidence(
+      rawResult.evidence,
+      text,
+    );
     const directionScores = {} as Record<Direction, DirectionEvidence>;
     const aiScores = (rawResult.scores ?? {}) as AiDirectionScores;
     if (!this.hasUsableAiScores(aiScores)) {
       throw new Error('Invalid AI response: missing usable direction scores');
     }
+
+    const validatedSummary = this.validateAiSummary(rawResult.summary, title, articleText);
+    if (!validatedSummary) {
+      throw new Error('Invalid AI response: summary is empty, ungrounded, or exceeds 200 characters');
+    }
+
+    const completeAiEvidence = this.hasCompleteAiEvidence(aiScores, evidenceByDirection);
 
     for (const dir of DIRECTIONS) {
       const directScores = aiScores[dir.id];
@@ -794,7 +881,11 @@ export class AiScoringService {
       if (llmScores && typeof llmScores === 'object') {
         const ruleEvidence = this.scoreDirectionEvidence(dir, text, sourceTier);
         if (directScores) {
-          const llmEvidence = this.mapDirectionLlmToEvidence(dir, llmScores);
+          const llmEvidence = this.mapDirectionLlmToEvidence(
+            dir,
+            llmScores,
+            evidenceByDirection[dir.id],
+          );
           directionScores[dir.id] = this.combineEvidence(
             llmEvidence,
             ruleEvidence,
@@ -808,8 +899,10 @@ export class AiScoringService {
               legacyEvidence.normalizedScore,
               ruleEvidence.normalizedScore,
             ),
-            hasClearEvidence:
-              legacyEvidence.hasClearEvidence || ruleEvidence.hasClearEvidence,
+            // Score-only legacy responses have no quote to validate. Keep the
+            // values for compatibility, but never let them pass a direction
+            // gate or become an automatically publishable primary.
+            hasClearEvidence: false,
             dimensionScores: {
               ...ruleEvidence.dimensionScores,
               ...legacyEvidence.dimensionScores,
@@ -858,14 +951,16 @@ export class AiScoringService {
       (directionScores[primaryDirection]?.hasClearEvidence ?? false);
 
     return {
-      summary: rawResult.summary,
+      summary: validatedSummary,
       directionScores,
       primaryDirection,
       primaryScore,
       publishScore,
       coreEvidencePassed,
-      aiProcessed: true,
-      degradeReason: null,
+      // Keep valid partial evidence for human review, but only mark the AI
+      // pass complete when every proposed non-zero score has its own chain.
+      aiProcessed: completeAiEvidence,
+      degradeReason: completeAiEvidence ? null : 'incomplete text-grounded evidence chain',
     };
   }
 
@@ -887,7 +982,6 @@ export class AiScoringService {
     const policy = getDirectionScoringPolicy(dir.id);
     let rawSum = 0;
     let maxRaw = 0;
-    let coreEvidenceCount = 0;
     let evidenceCount = 0;
 
     for (const dim of dir.dimensions) {
@@ -902,14 +996,17 @@ export class AiScoringService {
       rawSum += score * weight;
       maxRaw += DIMENSION_FULL * weight;
       if (score > 0) evidenceCount++;
-      if (policy.coreDimensions.includes(dim) && score >= DIMENSION_FULL) {
-        coreEvidenceCount++;
-      }
     }
 
-    const hasClearEvidence =
-      coreEvidenceCount >= policy.minCoreEvidence &&
-      evidenceCount >= policy.minEvidenceDimensions;
+    // Rules keep the pipeline useful when the AI quota is exhausted. The
+    // collector separately marks that result as a draft, so regex-only scores
+    // cannot pass the publication gate.
+    // Classification and publication use the same direction-specific gate;
+    // the policy's legacy coreDimensions list is display metadata only.
+    const hasClearEvidence = this.hasSufficientDirectionEvidence(
+      dimensionScores,
+      dir.id,
+    );
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
 
@@ -921,18 +1018,327 @@ export class AiScoringService {
   }
 
   private detectEvidence(text: string, patterns: EvidencePatterns): number {
-    for (const re of patterns.strong) {
-      if (re.test(text)) return DIMENSION_FULL;
+    // Evaluate sentence-sized claims so a keyword in an unrelated paragraph
+    // cannot complete a direction. Negated, planned, and rumored claims are
+    // retained as review hints but never count as strong evidence.
+    const sentences = text
+      .split(/[。！？!?\n]+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean);
+    for (const sentence of sentences) {
+      if (this.hasNegatedOrUncertainContext(sentence)) continue;
+      if (patterns.strong.some((re) => re.test(sentence))) return DIMENSION_FULL;
     }
-    const lower = text.toLowerCase();
-    const weakMatches = patterns.weak.filter((kw) => lower.includes(kw)).length;
-    if (weakMatches >= 2) return DIMENSION_HALF;
+    const weakMatches = new Set<string>();
+    for (const sentence of sentences) {
+      if (this.hasNegatedOrUncertainContext(sentence)) continue;
+      const lower = sentence.toLowerCase();
+      for (const keyword of patterns.weak) {
+        if (lower.includes(keyword.toLowerCase())) weakMatches.add(keyword);
+      }
+    }
+    if (weakMatches.size >= 2) return DIMENSION_HALF;
     return 0;
+  }
+
+  private collectClassificationEvidence(text: string, dir: DirectionMeta): string[] {
+    const patterns = DIRECTION_PATTERNS[dir.id];
+    return text.split(/[。！？!?\n]+/)
+      .map((value) => value.trim())
+      .filter((sentence) => sentence.length > 0
+        && !this.hasNegatedOrUncertainContext(sentence)
+        && dir.dimensions.some((dimension) =>
+          patterns[dimension]?.strong.some((re) => re.test(sentence))))
+      .slice(0, 3);
+  }
+
+  private validateAiEvidence(
+    rawEvidence: unknown,
+    articleText: string,
+  ): Partial<Record<Direction, Record<string, ScoringEvidence[]>>> {
+    const validated: Partial<Record<Direction, Record<string, ScoringEvidence[]>>> = {};
+    if (!Array.isArray(rawEvidence)) return validated;
+
+    for (const rawItem of rawEvidence.slice(0, 80)) {
+      const item = this.validateEvidenceItem(rawItem, articleText);
+      if (!item) continue;
+      const byDimension = validated[item.direction] ?? {};
+      const items = byDimension[item.dimension] ?? [];
+      items.push(item);
+      byDimension[item.dimension] = items;
+      validated[item.direction] = byDimension;
+    }
+    return validated;
+  }
+
+  private validateAiSummary(summary: unknown, title: string, content: string): string | null {
+    if (typeof summary !== 'string') return null;
+    const value = summary.replace(/\s+/g, ' ').trim();
+    if (value.length === 0 || value.length > 200 || /```|^\s*[<{[]/.test(value)) return null;
+
+    const source = `${title}\n${content}`.normalize('NFKC').toLowerCase();
+    const hasChineseSource = /[\u3400-\u9fff]/.test(source);
+    if (hasChineseSource && !/[\u3400-\u9fff]/.test(value)) return null;
+    if (!hasChineseSource && !/[a-z]/i.test(value)) return null;
+
+    // Require multiple literal anchors (or one quantitative anchor). This
+    // rejects fluent hallucinations while allowing concise paraphrases.
+    const sourceNumbers: string[] = source.match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
+    const summaryNumbers: string[] = value.toLowerCase().match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
+    if (summaryNumbers.some((number) => sourceNumbers.includes(number))) return value;
+
+    const anchors = new Set<string>();
+    for (const token of source.match(/[a-z][a-z0-9_-]{2,}/gi) || []) anchors.add(token.toLowerCase());
+    for (const token of value.match(/[a-z][a-z0-9_-]{2,}/gi) || []) {
+      if (anchors.has(token.toLowerCase())) anchors.add(`hit:${token.toLowerCase()}`);
+    }
+    const asciiHits = [...anchors].filter((token) => token.startsWith('hit:')).length;
+
+    const cjkNgrams = (text: string): Set<string> => {
+      const output = new Set<string>();
+      for (const run of text.match(/[\u3400-\u9fff]{2,}/g) || []) {
+        const chars = [...run];
+        for (const size of [2, 3]) {
+          for (let index = 0; index <= chars.length - size; index++) {
+            output.add(chars.slice(index, index + size).join(''));
+          }
+        }
+      }
+      return output;
+    };
+    const sourceNgrams = cjkNgrams(source);
+    const cjkHits = [...cjkNgrams(value)].filter((gram) => sourceNgrams.has(gram)).length;
+    return asciiHits + cjkHits >= 2 ? value : null;
+  }
+
+  private hasCompleteAiEvidence(
+    scores: AiDirectionScores,
+    evidenceByDirection: Partial<Record<Direction, Record<string, ScoringEvidence[]>>>,
+  ): boolean {
+    let hasAnyNonZero = false;
+    for (const [rawDirection, rawValues] of Object.entries(scores)) {
+      if (!rawValues || typeof rawValues !== 'object') continue;
+      const direction = this.normalizeEvidenceDirection(rawDirection);
+      if (!direction) continue;
+      const verified = evidenceByDirection[direction] || {};
+      for (const [dimension, rawValue] of Object.entries(rawValues as Record<string, unknown>)) {
+        const proposed = this.clampDirectionScore(rawValue);
+        if (proposed === 0) continue;
+        hasAnyNonZero = true;
+        const evidence = verified[dimension] || [];
+        // Planned, rumored, and pending claims remain traceable review
+        // signals at 2.5. validateEvidenceItem has already capped them, so
+        // they can never serve as a full-evidence proof of deployment.
+        if (!evidence.some((item) => item.score >= proposed)) return false;
+      }
+    }
+    // An all-zero, schema-valid response has no unsupported claim to publish.
+    return !hasAnyNonZero || Object.values(evidenceByDirection).some((value) => value && Object.keys(value).length > 0);
+  }
+
+  private validateEvidenceItem(
+    rawItem: unknown,
+    articleText: string,
+  ): ScoringEvidence | null {
+    if (!rawItem || typeof rawItem !== 'object') return null;
+    const raw = rawItem as Record<string, unknown>;
+    const direction = this.normalizeEvidenceDirection(raw.direction);
+    if (!direction || typeof raw.dimension !== 'string') return null;
+
+    const meta = DIRECTIONS.find((item) => item.id === direction);
+    if (!meta || !meta.dimensions.includes(raw.dimension)) return null;
+
+    const proposedScore = this.clampDirectionScore(raw.score);
+    const quote = this.readEvidenceText(raw.quote, 280);
+    const subject = this.readEvidenceText(raw.subject, 160);
+    const predicate = this.readEvidenceText(raw.predicate, 160);
+    const object = this.readEvidenceText(raw.object, 240);
+    const certainty = this.readEvidenceCertainty(raw.certainty);
+    const fields = this.readEvidenceFields(raw.fields);
+
+    // Evidence must be literally traceable to the submitted article, not an
+    // AI-generated paraphrase. A missing claim tuple cannot establish a fact.
+    if (!proposedScore || !quote || !articleText.includes(quote)
+      || !subject || !predicate || !object || !certainty || !fields) {
+      return null;
+    }
+
+    const quoteIndex = articleText.indexOf(quote);
+    const context = articleText.slice(
+      Math.max(0, quoteIndex - 24),
+      Math.min(articleText.length, quoteIndex + quote.length + 24),
+    );
+    const isUncertain = certainty === 'planned' || certainty === 'claimed'
+      || certainty === 'rumor' || this.hasNegatedOrUncertainContext(context);
+    const hasClaimTupleInQuote = this.claimTupleMatchesQuote(
+      quote,
+      subject,
+      predicate,
+      object,
+    );
+    const score = proposedScore === DIMENSION_FULL
+      && (!hasClaimTupleInQuote
+        || !this.hasRequiredEvidenceFields(direction, raw.dimension, fields, quote)
+        || isUncertain)
+      ? DIMENSION_HALF
+      : proposedScore;
+
+    return {
+      direction,
+      dimension: raw.dimension,
+      score,
+      quote,
+      subject,
+      predicate,
+      object,
+      certainty,
+      status: typeof raw.status === 'string' ? raw.status.slice(0, 80) : undefined,
+      fields,
+    };
+  }
+
+  private normalizeEvidenceDirection(value: unknown): Direction | null {
+    if (typeof value !== 'string') return null;
+    if (ALL_DIRECTION_IDS.includes(value as Direction)) return value as Direction;
+    return LEGACY_DIRECTION_MAP[value] ?? null;
+  }
+
+  private readEvidenceText(value: unknown, maxLength: number): string | null {
+    if (typeof value !== 'string') return null;
+    const text = value.trim();
+    return text.length > 0 && text.length <= maxLength ? text : null;
+  }
+
+  private readEvidenceCertainty(value: unknown): EvidenceCertainty | null {
+    return value === 'fact' || value === 'announced' || value === 'planned'
+      || value === 'claimed' || value === 'rumor'
+      ? value
+      : null;
+  }
+
+  private readEvidenceFields(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const entries = Object.entries(value as Record<string, unknown>).filter(
+      ([key, fieldValue]) => key.length > 0 && key.length <= 64
+        && (typeof fieldValue === 'string' || typeof fieldValue === 'number'
+          || typeof fieldValue === 'boolean' || Array.isArray(fieldValue)),
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+  }
+
+  private hasNegatedOrUncertainContext(context: string): boolean {
+    return /\b(?:not|no|without|never|failed|unavailable|rumored|rumour|pending|intent(?:s|ion)?|intend(?:s|ed)?|plans?\s+to|will|shall|may|might|could|preview|demo|not\s+deployed|to\s+be\s+deployed)\b|未|没有|尚未|待|等待|计划|拟|预计|(?<!已)将|意图|打算|传闻|据称|可能|预览|演示|尚未部署/i.test(context);
+  }
+
+  private claimTupleMatchesQuote(
+    quote: string,
+    subject: string,
+    predicate: string,
+    object: string,
+  ): boolean {
+    const normalizedQuote = this.normalizeEvidenceText(quote);
+    return [subject, predicate, object].every((value) => {
+      const normalizedValue = this.normalizeEvidenceText(value);
+      // Chinese single-character function words such as "为" are valid
+      // predicates in a structured fact; do not reject their evidence solely
+      // because an English-oriented minimum length would be two characters.
+      return normalizedValue.length >= 1 && normalizedQuote.includes(normalizedValue);
+    });
+  }
+
+  private normalizeEvidenceText(value: string): string {
+    return value.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  }
+
+  private hasRequiredEvidenceFields(
+    direction: Direction,
+    dimension: string,
+    fields: Record<string, unknown>,
+    quote: string,
+  ): boolean {
+    const present = (...keys: string[]) => keys.every((key) => {
+      const value = fields[key];
+      return value !== undefined && value !== null && value !== '';
+    });
+    const oneOf = (...keys: string[]) => keys.some((key) => {
+      const value = fields[key];
+      return value !== undefined && value !== null && value !== '';
+    });
+
+    const requirement = getDirectionEvidenceRequirement(direction, dimension);
+    if (!requirement || !present(...requirement.required)) {
+      return false;
+    }
+
+    // Every required fact needs a literal source span. A direction can choose
+    // one alternative supporting fact, but it must also be present in the
+    // quote; a made-up metric, amount, version, or deployment scope cannot
+    // complete a five-point score.
+    if (!requirement.required.every((key) =>
+      this.fieldValueMatchesQuote(key, fields[key], quote))) {
+      return false;
+    }
+    if (requirement.oneOf && (!oneOf(...requirement.oneOf)
+      || !requirement.oneOf.some((key) =>
+        fields[key] !== undefined && fields[key] !== null && fields[key] !== ''
+        && this.fieldValueMatchesQuote(key, fields[key], quote)))) {
+      return false;
+    }
+
+    if (dimension === 'modality_coverage') {
+      const modalities = fields.modalities;
+      if (!Array.isArray(modalities) || new Set(modalities).size < 2) return false;
+    }
+
+    return true;
+  }
+
+  private fieldValueMatchesQuote(
+    key: string,
+    value: unknown,
+    quote: string,
+  ): boolean {
+    if (Array.isArray(value)) {
+      return value.length > 0 && value.every((item) =>
+        this.fieldValueMatchesQuote(key, item, quote));
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') return false;
+    const rawValue = String(value).trim();
+    if (!rawValue) return false;
+
+    // Status values may be normalized for the database, while their source
+    // text remains Chinese or a different product vocabulary.
+    if (key === 'status') {
+      const statusPatterns: Record<string, RegExp> = {
+        deployed: /deploy|部署|上线|量产|投产|生产/, production: /production|生产|量产/,
+        ga: /\bga\b|正式发布|全面上线/, pilot: /pilot|试点/,
+        completed: /complete|完成/, signed: /sign|签署/,
+      };
+      const pattern = statusPatterns[rawValue.toLowerCase()];
+      if (pattern?.test(quote)) return true;
+    }
+
+    // Preserve unit-only values such as "%" or "$" that are removed by
+    // punctuation normalization but are still direct quantitative evidence.
+    if (/^[^\p{L}\p{N}]+$/u.test(rawValue)) return quote.includes(rawValue);
+    const normalizedValue = this.normalizeEvidenceText(rawValue);
+    return normalizedValue.length > 0
+      && this.normalizeEvidenceText(quote).includes(normalizedValue);
+  }
+
+  private scoreFromVerifiedEvidence(
+    proposedScore: number,
+    evidence: ScoringEvidence[],
+  ): number {
+    if (proposedScore === 0 || evidence.length === 0) return 0;
+    const bestEvidence = Math.max(...evidence.map((item) => item.score));
+    return Math.min(proposedScore, bestEvidence);
   }
 
   private mapDirectionLlmToEvidence(
     dir: DirectionMeta,
     llmScores: Record<string, unknown>,
+    verifiedEvidence: Record<string, ScoringEvidence[]> = {},
   ): DirectionEvidence {
     const dimensionScores: DimensionScores = {};
     const policy = getDirectionScoringPolicy(dir.id);
@@ -941,9 +1347,13 @@ export class AiScoringService {
 
     for (const dimension of dir.dimensions) {
       const value = this.clampDirectionScore(llmScores[dimension]);
-      dimensionScores[dimension] = value;
+      const evidence = verifiedEvidence[dimension] ?? [];
+      // AI scores are proposals. A non-zero value becomes effective only when
+      // the response supplies a text-grounded evidence item for this dimension.
+      const verifiedScore = this.scoreFromVerifiedEvidence(value, evidence);
+      dimensionScores[dimension] = verifiedScore;
       const weight = policy.weights[dimension] ?? 1;
-      rawSum += value * weight;
+      rawSum += verifiedScore * weight;
       maxRaw += DIMENSION_FULL * weight;
     }
 
@@ -960,6 +1370,7 @@ export class AiScoringService {
         : Math.min(normalizedScore, policy.maxWithoutCoreEvidence),
       hasClearEvidence,
       dimensionScores,
+      evidenceByDimension: verifiedEvidence,
     };
   }
 
@@ -986,7 +1397,9 @@ export class AiScoringService {
       rawSum += mapped;
     }
 
-    const hasClearEvidence = rawSum >= DIMENSION_FULL * 2;
+    // Older score-only plugin responses cannot prove their own claims. Keep
+    // their values for review compatibility, but never let them pass a gate.
+    const hasClearEvidence = false;
     const maxRaw = oldDimKeys.length * DIMENSION_FULL;
     const normalizedScore = Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE);
 
@@ -999,11 +1412,10 @@ export class AiScoringService {
   }
 
   private clampDirectionScore(value: unknown): number {
-    if (typeof value !== 'number' || Number.isNaN(value)) return 0;
-    return Math.max(
-      0,
-      Math.min(DIMENSION_FULL, Math.round(value * 2) / 2),
-    );
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+    return value === 0 || value === DIMENSION_HALF || value === DIMENSION_FULL
+      ? value
+      : 0;
   }
 
   private hasUsableAiScores(scores: AiDirectionScores): boolean {
@@ -1027,9 +1439,16 @@ export class AiScoringService {
     dir: DirectionMeta,
     sourceTier: string,
   ): DirectionEvidence {
-    const merged: DimensionScores = { ...rule.dimensionScores };
-    for (const [k, v] of Object.entries(llm.dimensionScores)) {
-      merged[k] = Math.max(merged[k] ?? 0, v);
+    const merged: DimensionScores = { ...llm.dimensionScores };
+    for (const dimension of dir.dimensions) {
+      // A regex hit may fill a missing AI assessment as a review signal, but
+      // it cannot upgrade a verified AI score.
+      if ((merged[dimension] ?? 0) === 0) {
+        merged[dimension] = Math.min(
+          rule.dimensionScores[dimension] ?? 0,
+          DIMENSION_HALF,
+        );
+      }
     }
 
     const policy = getDirectionScoringPolicy(dir.id);
@@ -1041,7 +1460,12 @@ export class AiScoringService {
     for (const dim of dir.dimensions) {
       rawSum += (merged[dim] ?? 0) * (policy.weights[dim] ?? 1);
     }
-    const hasClearEvidence = this.hasSufficientDirectionEvidence(merged, dir.id);
+    // A primary direction must be grounded in validated AI evidence. Rule
+    // fallback values may broaden review information but cannot satisfy it.
+    const hasClearEvidence = this.hasSufficientDirectionEvidence(
+      llm.dimensionScores,
+      dir.id,
+    );
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
     const cappedScore = !hasClearEvidence
@@ -1052,6 +1476,7 @@ export class AiScoringService {
       normalizedScore: cappedScore,
       hasClearEvidence,
       dimensionScores: merged,
+      evidenceByDimension: llm.evidenceByDimension,
     };
   }
 
@@ -1077,10 +1502,9 @@ export class AiScoringService {
     for (const dim of dir.dimensions) {
       rawSum += (merged[dim] ?? 0) * (policy.weights[dim] ?? 1);
     }
-    const hasClearEvidence = this.hasSufficientDirectionEvidence(
-      merged,
-      'data_eval',
-    );
+    // Legacy eval/data scores are retained for display only; without verified
+    // evidence they must not satisfy the new data/evaluation gate.
+    const hasClearEvidence = false;
     const normalizedScore = Math.max(
       evalEv.normalizedScore,
       dataEv.normalizedScore,
@@ -1123,15 +1547,7 @@ export class AiScoringService {
     dimensionScores: DimensionScores,
     direction: Direction,
   ): boolean {
-    const policy = getDirectionScoringPolicy(direction);
-    const coreEvidenceCount = policy.coreDimensions.filter(
-      (dimension) => (dimensionScores[dimension] ?? 0) >= DIMENSION_FULL,
-    ).length;
-    const evidenceCount = Object.values(dimensionScores).filter(
-      (value) => value > 0,
-    ).length;
-    return coreEvidenceCount >= policy.minCoreEvidence
-      && evidenceCount >= policy.minEvidenceDimensions;
+    return hasSufficientDirectionEvidence(direction, dimensionScores);
   }
 
   private computePublishScore(
@@ -1204,7 +1620,10 @@ export class AiScoringService {
       .replace(/\n+/g, ' ')
       .split(/[。！？.!?]/)
       .filter((s: string) => s.trim().length > 10);
-    if (sentences.length === 0) return title;
+    if (sentences.length === 0) {
+      const fallback = `${title || ''}`.trim();
+      return fallback.slice(0, 200) || '原文未提供可用摘要';
+    }
     const excerpt = sentences.slice(0, 2).join('。').trim();
     return excerpt.length > 200 ? `${excerpt.slice(0, 200)}...` : excerpt;
   }
