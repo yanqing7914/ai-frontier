@@ -1455,17 +1455,40 @@ export class CollectorService {
     const rescoredIds = new Set<string>();
     for (const art of pendingArticles) {
       if (shared?.excludeIds?.has(art.id)) continue;
-      const srcUsed = perSourceCount.get(art.feedSourceId) || 0;
-      if (srcUsed >= aiPerSourceLimit) continue;
-      if (!await this.reserveAiQuota(today, aiDailyLimit, art.feedSourceId, aiPerSourceLimit)) {
-        this.logger.log('Rescore: daily limit reached');
-        break;
-      }
-      aiCount++;
-      perSourceCount.set(art.feedSourceId, srcUsed + 1);
       const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
       const [fullArt] = await this.db.select().from(article).where(eq(article.id, art.id));
       if (!fullArt) continue;
+
+      // Rebuild the auditable rule fallback even when the AI quota or source
+      // quota is exhausted. Existing drafts otherwise remain permanently
+      // invisible because the next publish gate sees empty evidence rows.
+      const srcUsed = perSourceCount.get(art.feedSourceId) || 0;
+      if (srcUsed >= aiPerSourceLimit) {
+        const ruleResult = this.aiScoringService.ruleBasedScoreArticle(
+          art.title,
+          fullArt.scoringInput ?? art.title,
+          tier,
+          `per_source_limit_reached(${art.sourceName}:${srcUsed}/${aiPerSourceLimit})`,
+        );
+        await this.persistRuleFallback(art.id, ruleResult);
+        rescored++;
+        rescoredIds.add(art.id);
+        continue;
+      }
+      if (!await this.reserveAiQuota(today, aiDailyLimit, art.feedSourceId, aiPerSourceLimit)) {
+        const ruleResult = this.aiScoringService.ruleBasedScoreArticle(
+          art.title,
+          fullArt.scoringInput ?? art.title,
+          tier,
+          'ai_daily_limit_reached',
+        );
+        await this.persistRuleFallback(art.id, ruleResult);
+        rescored++;
+        rescoredIds.add(art.id);
+        continue;
+      }
+      aiCount++;
+      perSourceCount.set(art.feedSourceId, srcUsed + 1);
       const scoringInput = fullArt.scoringInput;
       if (!scoringInput || scoringInput.trim().length < 12) {
         const reason = 'missing_immutable_scoring_input';
@@ -1528,6 +1551,32 @@ export class CollectorService {
     if (shared) shared.aiCount = aiCount;
     this.logger.log(`Rescore: ${rescored} rescored, ${succeeded} ok, ${failed} fail`);
     return { rescored, succeeded, failed, rescoredIds };
+  }
+
+  private async persistRuleFallback(
+    articleId: string,
+    result: ReturnType<AiScoringService['ruleBasedScoreArticle']>,
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.delete(directionScore).where(eq(directionScore.articleId, articleId));
+      for (const dir of DIRECTIONS) {
+        const ev = result.directionScores[dir];
+        await tx.insert(directionScore).values({
+          articleId,
+          direction: dir,
+          dimensionScores: ev?.dimensionScores ?? {},
+          evidence: Object.values(ev?.evidenceByDimension ?? {}).flat(),
+          totalScore: ev?.normalizedScore ?? 0,
+        });
+      }
+      await tx.update(article).set({
+        primaryDirection: result.primaryDirection,
+        primaryScore: result.publishScore,
+        summary: result.summary,
+        aiProcessed: false,
+        aiDegradeReason: result.degradeReason,
+      }).where(eq(article.id, articleId));
+    });
   }
 
   // ─── Publish Gate ─────────────────────────────────────────
