@@ -1505,11 +1505,16 @@ export class CollectorService {
           scoringInput,
         );
         if (!result.aiProcessed) {
+          const fallback = this.aiScoringService.ruleBasedScoreArticle(
+            art.title,
+            scoringInput,
+            tier,
+            result.degradeReason || 'ai_scoring_degraded',
+          );
+          await this.persistRuleFallback(art.id, fallback);
           failed++;
-          await this.db.update(article).set({
-            aiProcessed: false,
-            aiDegradeReason: result.degradeReason || 'ai_scoring_degraded',
-          }).where(eq(article.id, art.id));
+          rescored++;
+          rescoredIds.add(art.id);
           continue;
         }
         // Keep the nine direction rows and article metadata atomic. A failed
@@ -1539,11 +1544,16 @@ export class CollectorService {
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
         this.logger.error(`Rescore failed for "${art.title}": ${errMsg}`);
-        await this.db.update(article).set({
-          aiProcessed: false,
-          aiDegradeReason: `rescore_failed: ${errMsg}`,
-        }).where(eq(article.id, art.id));
+        const fallback = this.aiScoringService.ruleBasedScoreArticle(
+          art.title,
+          scoringInput,
+          tier,
+          `rescore_failed: ${errMsg}`,
+        );
+        await this.persistRuleFallback(art.id, fallback);
         failed++;
+        rescored++;
+        rescoredIds.add(art.id);
       }
     }
     if (shared) shared.aiCount = aiCount;
