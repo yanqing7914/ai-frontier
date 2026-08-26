@@ -1443,7 +1443,6 @@ export class CollectorService {
         // Backlog rescoring must not consume today's provider quota before
         // current-day articles have a chance to become publishable.
         sql`(${article.collectedAt} AT TIME ZONE 'Asia/Shanghai')::date = ${today}::date`,
-        sql`${article.sourceName} != 'arXiv cs.AI'`,
       ));
     this.logger.log(`Rescore pending: ${pendingArticles.length} articles, ai=${aiCount}/${aiDailyLimit}`);
 
@@ -1458,6 +1457,15 @@ export class CollectorService {
       const tier = sourceTiers.get(art.feedSourceId) ?? 'signal';
       const [fullArt] = await this.db.select().from(article).where(eq(article.id, art.id));
       if (!fullArt) continue;
+      const scoringInput = fullArt.scoringInput;
+      if (!scoringInput || scoringInput.trim().length < 12) {
+        await this.db.update(article).set({
+          aiProcessed: false,
+          aiDegradeReason: 'missing_immutable_scoring_input',
+        }).where(eq(article.id, art.id));
+        failed++;
+        continue;
+      }
 
       // Rebuild the auditable rule fallback even when the AI quota or source
       // quota is exhausted. Existing drafts otherwise remain permanently
@@ -1466,7 +1474,7 @@ export class CollectorService {
       if (srcUsed >= aiPerSourceLimit) {
         const ruleResult = this.aiScoringService.ruleBasedScoreArticle(
           art.title,
-          fullArt.scoringInput ?? art.title,
+          scoringInput,
           tier,
           `per_source_limit_reached(${art.sourceName}:${srcUsed}/${aiPerSourceLimit})`,
         );
@@ -1478,7 +1486,7 @@ export class CollectorService {
       if (!await this.reserveAiQuota(today, aiDailyLimit, art.feedSourceId, aiPerSourceLimit)) {
         const ruleResult = this.aiScoringService.ruleBasedScoreArticle(
           art.title,
-          fullArt.scoringInput ?? art.title,
+          scoringInput,
           tier,
           'ai_daily_limit_reached',
         );
@@ -1489,16 +1497,6 @@ export class CollectorService {
       }
       aiCount++;
       perSourceCount.set(art.feedSourceId, srcUsed + 1);
-      const scoringInput = fullArt.scoringInput;
-      if (!scoringInput || scoringInput.trim().length < 12) {
-        const reason = 'missing_immutable_scoring_input';
-        await this.db.update(article).set({
-          aiProcessed: false,
-          aiDegradeReason: reason,
-        }).where(eq(article.id, art.id));
-        failed++;
-        continue;
-      }
       try {
         const result = await this.aiScoringService.scoreArticle(
           art.title,
