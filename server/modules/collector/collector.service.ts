@@ -857,10 +857,16 @@ export class CollectorService {
         await this.db.delete(directionScore).where(eq(directionScore.articleId, art.id));
         for (const dir of DIRECTIONS) {
           const ev = ruleResult.directionScores[dir];
+          // Rule scoring is the safe fallback when the AI quota is exhausted.
+          // Persist its text-grounded matches so the publish gate can audit the
+          // same evidence instead of treating every fallback score as opaque.
+          const evidence = ev?.evidenceByDimension
+            ? Object.values(ev.evidenceByDimension).flat()
+            : [];
           await this.db.insert(directionScore).values({
             articleId: art.id, direction: dir,
             dimensionScores: ev?.dimensionScores ?? {},
-            evidence: [],
+            evidence,
             totalScore: ev?.normalizedScore ?? 0,
           });
         }

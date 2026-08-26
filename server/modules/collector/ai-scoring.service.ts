@@ -1014,7 +1014,45 @@ export class AiScoringService {
       ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
       : normalizedScore;
 
-    return { normalizedScore: cappedScore, hasClearEvidence, dimensionScores };
+    // Keep the rule fallback auditable. The publication gate requires a direct
+    // quote for every full-score dimension; without this, quota exhaustion
+    // turns every otherwise valid rule result into an invisible draft.
+    const evidenceByDimension: Record<string, ScoringEvidence[]> = {};
+    const sentences = text
+      .split(/[。！？!?\n]+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean);
+    for (const dim of dir.dimensions) {
+      if ((dimensionScores[dim] ?? 0) < DIMENSION_FULL) continue;
+      const dimensionPatterns = patterns[dim];
+      const quote = sentences.find((sentence) =>
+        !this.hasNegatedOrUncertainContext(sentence)
+        && dimensionPatterns?.strong.some((re) => {
+          re.lastIndex = 0;
+          return re.test(sentence);
+        }),
+      );
+      if (!quote) continue;
+      evidenceByDimension[dim] = [{
+        direction: dir.id,
+        dimension: dim,
+        score: DIMENSION_FULL,
+        quote,
+        subject: dir.name,
+        predicate: 'contains rule evidence',
+        object: dim,
+        certainty: 'fact',
+        status: 'rule_verified',
+        fields: { source: 'rule', matcher: 'direction_pattern' },
+      }];
+    }
+
+    return {
+      normalizedScore: cappedScore,
+      hasClearEvidence,
+      dimensionScores,
+      evidenceByDimension,
+    };
   }
 
   private detectEvidence(text: string, patterns: EvidencePatterns): number {
