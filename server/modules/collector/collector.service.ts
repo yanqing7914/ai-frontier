@@ -21,6 +21,9 @@ import * as crypto from 'crypto';
 import { ALL_DIRECTION_IDS as DIRECTIONS, normalizeDirection } from '@shared/directions';
 import { canPublishArticle } from './publish-gate';
 import type { ScoreEvidence } from '@shared/api.interface';
+import {
+  runContentFilter,
+} from './architecture';
 
 export const PIPELINE_STAGE_ORDER = [
   'source_ingest', 'scheduled_fetch', 'parse', 'normalize', 'url_dedup', 'trace',
@@ -50,7 +53,7 @@ export function shouldAttemptAiScoring(status: string | undefined): boolean {
   return status === 'classified' || status === 'ambiguous';
 }
 
-interface PipelineArticle { id: string; title: string; url: string; dedupUrl: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; sourceName: string; sourceCategoryId: string | null; originPolicy: 'first_party' | 'editorial' | 'aggregator'; }
+interface PipelineArticle { id: string; title: string; url: string; dedupUrl: string; content: string; rawContent: string; feedSourceId: string; sourceUrl: string; sourceTier: string; sourceName: string; sourceCategoryId: string | null; originPolicy: 'first_party' | 'editorial' | 'aggregator'; publishedAt?: Date | null; }
 interface RawFetchResponse { feedSourceId: string; feedType: string; url: string; finalUrl: string; contentType: string; sourceName: string; sourceTier: string; sourceCategoryId: string | null; originPolicy: string | null; rawContent: string; byteLength: number; httpStatus: number; }
 
 /** Inputs and output are exported so clustering behaviour can be regression-tested without a DB. */
@@ -729,7 +732,7 @@ export class CollectorService {
     // The permanent unique constraints make concurrent process races safe. A
     // conflict is logged below instead of silently treating an existing article
     // as a successful update.
-    const allNewArticles: PipelineArticle[] = [];
+    let allNewArticles: PipelineArticle[] = [];
     let insertConflicts = 0;
     for (const item of newItems) {
       const source = sourceById.get(item.feedSourceId);
@@ -770,6 +773,7 @@ export class CollectorService {
         sourceName: item.sourceName,
         sourceCategoryId: source?.sourceCategoryId ?? null,
         originPolicy,
+        publishedAt: item.publishedAt,
       });
     }
     this.logger.log(`Inserted ${allNewArticles.length} new articles; concurrent conflicts=${insertConflicts}`);
@@ -792,6 +796,65 @@ export class CollectorService {
       if (await this.traceOrigin(art)) { traceOk++; } else { traceFail++; traceFailIds.add(art.id); }
     }
     this.logger.log(`[6/12] trace: needed=${traceNeeded}, ok=${traceOk}, fail=${traceFail}`);
+
+    // Content filtering is a post-processing role attached to the existing
+    // classify boundary. Dropped/review items are removed from the active
+    // batch so they cannot consume scoring quota or reach publish_outputs.
+    let filterKept = 0;
+    let filterRejected = 0;
+    let filterReview = 0;
+    const filterAuditKeys: string[] = [];
+    const filterExcludedIds = new Set<string>();
+    const filterReadyArticles: PipelineArticle[] = [];
+    for (const art of allNewArticles) {
+      const filterEnvelope = runContentFilter(
+        {
+          articleId: art.id,
+          title: art.title,
+          content: art.content,
+          url: art.url,
+          sourceName: art.sourceName,
+          sourceTier: art.sourceTier,
+          sourceCategoryId: art.sourceCategoryId,
+          publishedAt: art.publishedAt?.toISOString() ?? null,
+        },
+      );
+      const filterOutput = filterEnvelope.output;
+      const filterAudit = JSON.stringify({
+        role: filterEnvelope.role,
+        contract_version: filterEnvelope.contractVersion,
+        outcome: filterEnvelope.outcome,
+        idempotency_key: filterEnvelope.idempotencyKey,
+        reason_code: filterOutput.reasonCode,
+        evidence: filterEnvelope.evidence,
+        diagnostics: filterEnvelope.diagnostics,
+      });
+      filterAuditKeys.push(`${art.id}:${filterEnvelope.idempotencyKey}:${filterEnvelope.outcome}`);
+
+      if (filterOutput.decision === 'reject' || filterEnvelope.outcome === 'rejected') {
+        filterRejected++;
+        filterExcludedIds.add(art.id);
+        await this.db.update(article).set({
+          status: 'blocked',
+          aiDegradeReason: filterAudit,
+        }).where(eq(article.id, art.id));
+        continue;
+      }
+      if (filterOutput.decision === 'review' || filterEnvelope.outcome === 'review') {
+        filterReview++;
+        filterExcludedIds.add(art.id);
+        await this.db.update(article).set({
+          status: 'pending_review',
+          aiDegradeReason: filterAudit,
+        }).where(eq(article.id, art.id));
+        await this.createReviewItem(art.id);
+        continue;
+      }
+      filterKept++;
+      filterReadyArticles.push(art);
+    }
+    allNewArticles = filterReadyArticles;
+    this.logger.log(`[content_filter] keep=${filterKept}, reject=${filterRejected}, review=${filterReview}, audit_keys=${filterAuditKeys.slice(0, 20).join(',')}${filterAuditKeys.length > 20 ? ',...' : ''}`);
 
     // ── Stage 7/12: classify (topic classification only, no ruleBasedScore) ──
     let classOk = 0, classDegraded = 0;
@@ -1026,7 +1089,10 @@ export class CollectorService {
       aiCount,
       perSourceCount,
       today,
-      excludeIds: new Set(allNewArticles.map((art) => art.id)),
+      excludeIds: new Set([
+        ...allNewArticles.map((art) => art.id),
+        ...filterExcludedIds,
+      ]),
     });
     this.logger.log(`Rescore pre-gate: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
 
