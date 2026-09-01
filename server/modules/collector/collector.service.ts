@@ -1155,7 +1155,9 @@ export class CollectorService {
       const checkUrl = await this.getFinalUrl(artRow.id);
       let blocked = false, blockReason = '', blockDetail = '';
 
-      if (artRow.publishedAt) {
+      // Staleness applies to already-published revalidation only. A newly
+      // collected item may legitimately reference an older announcement.
+      if (inPublishedRevalidation && artRow.publishedAt) {
         const pubTime = artRow.publishedAt instanceof Date ? artRow.publishedAt.getTime() : new Date(artRow.publishedAt).getTime();
         if (pubTime < Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000) {
           blocked = true; blockReason = 'content_stale';
@@ -1168,7 +1170,10 @@ export class CollectorService {
           .from(feedSource).where(eq(feedSource.id, artRow.feedSourceId));
         if (src && src.totalFetches >= 3) {
           const rate = Math.round((src.successFetches / src.totalFetches) * 100);
-          if (rate < minSuccessRate || src.consecutiveFailures >= maxConsecFail) {
+          // Historical success rate should not reject a fresh article. Keep
+          // the hard consecutive-failure circuit breaker for actively broken
+          // sources, while allowing current content through link/quality gates.
+          if (src.consecutiveFailures >= maxConsecFail) {
             blocked = true; blockReason = 'source_unreliable';
             blockDetail = `Rate ${rate}%, consec fail ${src.consecutiveFailures}`; gateUnreliable++;
           }

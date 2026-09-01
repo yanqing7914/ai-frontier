@@ -97,7 +97,7 @@ const TodayHot = () => {
       className="min-h-screen"
       style={{ backgroundColor: 'hsl(220,20%,97%)' }}
     >
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
         {/* Status Bar */}
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex shrink-0 items-center gap-2">
@@ -123,7 +123,7 @@ const TodayHot = () => {
         </div>
 
         {/* Direction Filter Bar */}
-        <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
+        <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-2">
           {DIRECTIONS.map((dir) => {
             const isSelected = selected.has(dir.key);
             return (
@@ -131,6 +131,7 @@ const TodayHot = () => {
                 key={dir.key}
                 type="button"
                 onClick={() => toggleDirection(dir.key)}
+                aria-pressed={isSelected}
                 className="shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors border"
                 style={
                   isSelected
@@ -172,19 +173,34 @@ const TodayHot = () => {
             </EmptyHeader>
           </Empty>
         ) : filtered.length === 0 ? (
-          <Empty className="py-20 border-dashed">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Flame className="size-5" />
+          <Empty className="min-h-[360px] border-dashed bg-white/70 py-16">
+            <EmptyHeader className="max-w-md">
+              <EmptyMedia variant="icon" className="mb-2 size-12 rounded-2xl bg-primary/10 text-primary">
+                <Flame className="size-6" />
               </EmptyMedia>
-              <EmptyTitle>暂无符合条件的热点内容</EmptyTitle>
-              <EmptyDescription>
-                尝试调整方向筛选条件或稍后再来查看
+              <EmptyTitle className="text-base">
+                {articles.length === 0 ? '今天还没有可展示的热点' : '当前筛选下暂无热点'}
+              </EmptyTitle>
+              <EmptyDescription className="text-sm leading-6">
+                {articles.length === 0
+                  ? '采集内容会经过分类、评分和质量门禁后发布；你可以稍后刷新查看。'
+                  : '已加载热点，但当前方向筛选没有匹配项；可以清除筛选或换一个方向。'}
               </EmptyDescription>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {articles.length > 0 && filtered.length === 0 && (
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                    清除筛选
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={fetchArticles}>
+                  <RefreshCw className="size-4" />
+                  刷新热点
+                </Button>
+              </div>
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {filtered.map((article: HotArticleItem) => {
               const dirConf = directionOf(article.primaryDirection);
               // Keep the preview compatible with articles written before the
@@ -195,7 +211,7 @@ const TodayHot = () => {
               return (
                 <div
                   key={article.id}
-                  className="bg-white border rounded-sm p-5 flex items-start gap-4"
+                  className="group flex items-start gap-4 rounded-xl border bg-white p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5"
                   style={{ borderColor: 'hsl(220,15%,88%)' }}
                 >
                   {/* Left: Content */}
@@ -206,9 +222,9 @@ const TodayHot = () => {
                       rel="noopener noreferrer"
                       title={`原始标题：${article.title}`}
                       aria-label={`打开原文：${readableTitle}`}
-                      className="inline-flex items-start gap-1.5 text-[15px] font-semibold leading-6 text-foreground underline-offset-4 transition-colors hover:text-primary hover:underline group"
+                      className="inline-flex max-w-full items-start gap-1.5 text-[15px] font-semibold leading-6 text-foreground underline-offset-4 transition-colors hover:text-primary hover:underline"
                     >
-                      <span className="line-clamp-2">{readableTitle}</span>
+                      <span className="line-clamp-2 break-words">{readableTitle}</span>
                       <ExternalLink className="mt-1 size-3.5 shrink-0 text-primary/70 transition-colors group-hover:text-primary" />
                     </UniversalLink>
 
