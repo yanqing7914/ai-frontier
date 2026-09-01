@@ -1,0 +1,40 @@
+name: Build Artifact
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+      - name: Write build metadata
+        run: |
+          printf '{"sha":"%s","ref":"%s","built_at":"%s"}\n' \
+            "$GITHUB_SHA" "$GITHUB_REF_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/build-metadata.json
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-dist-${{ github.sha }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14

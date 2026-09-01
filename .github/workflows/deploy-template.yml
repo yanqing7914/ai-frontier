@@ -1,0 +1,41 @@
+name: Deploy (manual template)
+
+on:
+  workflow_dispatch:
+    inputs:
+      healthcheck_url:
+        description: Optional public URL to check after an external deployment
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build deployable artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy-dist-${{ github.sha }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+      - name: Healthcheck external deployment (optional)
+        if: ${{ inputs.healthcheck_url != '' }}
+        run: ./deploy/healthcheck.sh "${{ inputs.healthcheck_url }}"
