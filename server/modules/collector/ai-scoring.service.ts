@@ -1,5 +1,17 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, Optional } from '@nestjs/common';
 import { CapabilityService } from '@lark-apaas/fullstack-nestjs-core';
+import {
+  createAgentGateway,
+  createAgentRegistry,
+  type AgentGateway,
+  type AgentInvocationOptions,
+} from './agents';
+import type { AgentRegistry } from './agents';
+
+export const AGENT_REGISTRY_TOKEN = 'COLLECTOR_AGENT_REGISTRY';
+export const AGENT_INVOCATION_OPTIONS_TOKEN =
+  'COLLECTOR_AGENT_INVOCATION_OPTIONS';
+export const AGENT_GATEWAY_TOKEN = 'COLLECTOR_AGENT_GATEWAY';
 import type {
   AiArticleScoringOneInput,
   AiArticleScoringOneOutput,
@@ -702,7 +714,37 @@ export class AiScoringService {
   constructor(
     @Inject(CapabilityService)
     private readonly capabilityService: CapabilityService,
-  ) {}
+    /** Registry is injected by the host after an operator verifies the agent. */
+    @Optional()
+    @Inject(AGENT_REGISTRY_TOKEN)
+    private readonly agentRegistry: AgentRegistry = createAgentRegistry(),
+    @Optional()
+    @Inject(AGENT_INVOCATION_OPTIONS_TOKEN)
+    agentInvocationOptionsInput?: AgentInvocationOptions,
+    @Optional()
+    @Inject(AGENT_GATEWAY_TOKEN)
+    agentGateway?: AgentGateway,
+  ) {
+    // Keep direct unit construction compatible while production Nest wiring
+    // supplies one shared gateway instance through the module token.
+    this.agentInvocationOptions = agentInvocationOptionsInput ?? {};
+    const gatewayOptions: AgentInvocationOptions =
+      agentInvocationOptionsInput !== undefined
+        ? this.agentInvocationOptions
+        : {
+            ...this.agentInvocationOptions,
+            adapters: {
+              ...(this.agentInvocationOptions.adapters || {}),
+              miaoda:
+                capabilityService as unknown as AgentInvocationOptions['miaoda'],
+            },
+          };
+    this.agentGateway =
+      agentGateway ?? createAgentGateway(agentRegistry, gatewayOptions);
+  }
+
+  private readonly agentInvocationOptions: AgentInvocationOptions;
+  private readonly agentGateway: AgentGateway;
 
   async scoreArticle(
     title: string,
@@ -711,14 +753,16 @@ export class AiScoringService {
     immutableScoringInput?: string,
   ): Promise<ArticleScoringResult> {
     try {
-      return await this.llmScore(title, content, sourceTier, immutableScoringInput);
+      return await this.llmScore(
+        title,
+        content,
+        sourceTier,
+        immutableScoringInput,
+      );
     } catch (error: unknown) {
       const errType =
         error instanceof Error ? error.constructor.name : typeof error;
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack =
-        error instanceof Error && error.stack ? error.stack.slice(0, 500) : '';
-      const degradeReason = `[${errType}] ${errMsg}${errStack ? '\n' + errStack : ''}`;
+      const degradeReason = `provider_error:${errType}`;
       this.logger.warn(
         JSON.stringify({
           message: `AI scoring failed for "${title}", falling back to rule-based`,
@@ -726,7 +770,7 @@ export class AiScoringService {
           actionKey: SCORING_ACTION_KEY,
           outputMode: 'unary',
           inputKeys: ['article_text'],
-          error: degradeReason,
+          errorCode: 'AI_PROVIDER_CALL_FAILED',
         }),
       );
       return this.ruleBasedScoreArticle(
@@ -781,7 +825,10 @@ export class AiScoringService {
         degradeReason: null,
       };
     } catch (error: unknown) {
-      const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      const reason =
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error);
       this.logger.warn(`Classification degraded for "${title}": ${reason}`);
       return {
         primaryDirection: null,
@@ -846,8 +893,14 @@ export class AiScoringService {
       : `${buildScoringInput(title, content)}\n来源层级：${sourceTier}`;
 
     const input: AiArticleScoringOneInput = { article_text: articleText };
-    const pluginCall = this.capabilityService.load(SCORING_PLUGIN_INSTANCE_ID);
-    const raw = await pluginCall.call(SCORING_ACTION_KEY, input);
+    const invocation = await this.agentGateway.invoke('content_evaluator', {
+      input,
+    });
+    if (invocation.ok !== true) {
+      const code = 'code' in invocation ? invocation.code : 'unknown';
+      throw new Error(`AI scoring gateway blocked: ${code}`);
+    }
+    const raw = invocation.output as AiArticleScoringOneOutput;
     const rawResult = raw as AiArticleScoringOneOutput;
 
     if (!rawResult || typeof rawResult.summary !== 'string') {
@@ -865,12 +918,21 @@ export class AiScoringService {
       throw new Error('Invalid AI response: missing usable direction scores');
     }
 
-    const validatedSummary = this.validateAiSummary(rawResult.summary, title, articleText);
+    const validatedSummary = this.validateAiSummary(
+      rawResult.summary,
+      title,
+      articleText,
+    );
     if (!validatedSummary) {
-      throw new Error('Invalid AI response: summary is empty, ungrounded, or exceeds 200 characters');
+      throw new Error(
+        'Invalid AI response: summary is empty, ungrounded, or exceeds 200 characters',
+      );
     }
 
-    const completeAiEvidence = this.hasCompleteAiEvidence(aiScores, evidenceByDirection);
+    const completeAiEvidence = this.hasCompleteAiEvidence(
+      aiScores,
+      evidenceByDirection,
+    );
 
     for (const dir of DIRECTIONS) {
       const directScores = aiScores[dir.id];
@@ -960,7 +1022,9 @@ export class AiScoringService {
       // Keep valid partial evidence for human review, but only mark the AI
       // pass complete when every proposed non-zero score has its own chain.
       aiProcessed: completeAiEvidence,
-      degradeReason: completeAiEvidence ? null : 'incomplete text-grounded evidence chain',
+      degradeReason: completeAiEvidence
+        ? null
+        : 'incomplete text-grounded evidence chain',
     };
   }
 
@@ -1010,9 +1074,10 @@ export class AiScoringService {
     const normalizedScore =
       maxRaw > 0 ? Math.round((rawSum / maxRaw) * MAX_DIRECTION_SCORE) : 0;
 
-    const cappedScore = !hasClearEvidence || evidenceCount < 2
-      ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
-      : normalizedScore;
+    const cappedScore =
+      !hasClearEvidence || evidenceCount < 2
+        ? Math.min(normalizedScore, policy.maxWithoutCoreEvidence)
+        : normalizedScore;
 
     // Keep the rule fallback auditable. The publication gate requires a direct
     // quote for every full-score dimension; without this, quota exhaustion
@@ -1025,26 +1090,29 @@ export class AiScoringService {
     for (const dim of dir.dimensions) {
       if ((dimensionScores[dim] ?? 0) < DIMENSION_FULL) continue;
       const dimensionPatterns = patterns[dim];
-      const quote = sentences.find((sentence) =>
-        !this.hasNegatedOrUncertainContext(sentence)
-        && dimensionPatterns?.strong.some((re) => {
-          re.lastIndex = 0;
-          return re.test(sentence);
-        }),
+      const quote = sentences.find(
+        (sentence) =>
+          !this.hasNegatedOrUncertainContext(sentence) &&
+          dimensionPatterns?.strong.some((re) => {
+            re.lastIndex = 0;
+            return re.test(sentence);
+          }),
       );
       if (!quote) continue;
-      evidenceByDimension[dim] = [{
-        direction: dir.id,
-        dimension: dim,
-        score: DIMENSION_FULL,
-        quote,
-        subject: dir.name,
-        predicate: 'contains rule evidence',
-        object: dim,
-        certainty: 'fact',
-        status: 'rule_verified',
-        fields: { source: 'rule', matcher: 'direction_pattern' },
-      }];
+      evidenceByDimension[dim] = [
+        {
+          direction: dir.id,
+          dimension: dim,
+          score: DIMENSION_FULL,
+          quote,
+          subject: dir.name,
+          predicate: 'contains rule evidence',
+          object: dim,
+          certainty: 'fact',
+          status: 'rule_verified',
+          fields: { source: 'rule', matcher: 'direction_pattern' },
+        },
+      ];
     }
 
     return {
@@ -1065,7 +1133,8 @@ export class AiScoringService {
       .filter(Boolean);
     for (const sentence of sentences) {
       if (this.hasNegatedOrUncertainContext(sentence)) continue;
-      if (patterns.strong.some((re) => re.test(sentence))) return DIMENSION_FULL;
+      if (patterns.strong.some((re) => re.test(sentence)))
+        return DIMENSION_FULL;
     }
     const weakMatches = new Set<string>();
     for (const sentence of sentences) {
@@ -1079,14 +1148,22 @@ export class AiScoringService {
     return 0;
   }
 
-  private collectClassificationEvidence(text: string, dir: DirectionMeta): string[] {
+  private collectClassificationEvidence(
+    text: string,
+    dir: DirectionMeta,
+  ): string[] {
     const patterns = DIRECTION_PATTERNS[dir.id];
-    return text.split(/[。！？!?\n]+/)
+    return text
+      .split(/[。！？!?\n]+/)
       .map((value) => value.trim())
-      .filter((sentence) => sentence.length > 0
-        && !this.hasNegatedOrUncertainContext(sentence)
-        && dir.dimensions.some((dimension) =>
-          patterns[dimension]?.strong.some((re) => re.test(sentence))))
+      .filter(
+        (sentence) =>
+          sentence.length > 0 &&
+          !this.hasNegatedOrUncertainContext(sentence) &&
+          dir.dimensions.some((dimension) =>
+            patterns[dimension]?.strong.some((re) => re.test(sentence)),
+          ),
+      )
       .slice(0, 3);
   }
 
@@ -1094,7 +1171,9 @@ export class AiScoringService {
     rawEvidence: unknown,
     articleText: string,
   ): Partial<Record<Direction, Record<string, ScoringEvidence[]>>> {
-    const validated: Partial<Record<Direction, Record<string, ScoringEvidence[]>>> = {};
+    const validated: Partial<
+      Record<Direction, Record<string, ScoringEvidence[]>>
+    > = {};
     if (!Array.isArray(rawEvidence)) return validated;
 
     for (const rawItem of rawEvidence.slice(0, 80)) {
@@ -1109,10 +1188,15 @@ export class AiScoringService {
     return validated;
   }
 
-  private validateAiSummary(summary: unknown, title: string, content: string): string | null {
+  private validateAiSummary(
+    summary: unknown,
+    title: string,
+    content: string,
+  ): string | null {
     if (typeof summary !== 'string') return null;
     const value = summary.replace(/\s+/g, ' ').trim();
-    if (value.length === 0 || value.length > 200 || /```|^\s*[<{[]/.test(value)) return null;
+    if (value.length === 0 || value.length > 200 || /```|^\s*[<{[]/.test(value))
+      return null;
 
     const source = `${title}\n${content}`.normalize('NFKC').toLowerCase();
     const hasChineseSource = /[\u3400-\u9fff]/.test(source);
@@ -1121,16 +1205,23 @@ export class AiScoringService {
 
     // Require multiple literal anchors (or one quantitative anchor). This
     // rejects fluent hallucinations while allowing concise paraphrases.
-    const sourceNumbers: string[] = source.match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
-    const summaryNumbers: string[] = value.toLowerCase().match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
-    if (summaryNumbers.some((number) => sourceNumbers.includes(number))) return value;
+    const sourceNumbers: string[] =
+      source.match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
+    const summaryNumbers: string[] =
+      value.toLowerCase().match(/\b\d+(?:\.\d+)?%?|\$\d+(?:\.\d+)?/g) || [];
+    if (summaryNumbers.some((number) => sourceNumbers.includes(number)))
+      return value;
 
     const anchors = new Set<string>();
-    for (const token of source.match(/[a-z][a-z0-9_-]{2,}/gi) || []) anchors.add(token.toLowerCase());
+    for (const token of source.match(/[a-z][a-z0-9_-]{2,}/gi) || [])
+      anchors.add(token.toLowerCase());
     for (const token of value.match(/[a-z][a-z0-9_-]{2,}/gi) || []) {
-      if (anchors.has(token.toLowerCase())) anchors.add(`hit:${token.toLowerCase()}`);
+      if (anchors.has(token.toLowerCase()))
+        anchors.add(`hit:${token.toLowerCase()}`);
     }
-    const asciiHits = [...anchors].filter((token) => token.startsWith('hit:')).length;
+    const asciiHits = [...anchors].filter((token) =>
+      token.startsWith('hit:'),
+    ).length;
 
     const cjkNgrams = (text: string): Set<string> => {
       const output = new Set<string>();
@@ -1145,13 +1236,17 @@ export class AiScoringService {
       return output;
     };
     const sourceNgrams = cjkNgrams(source);
-    const cjkHits = [...cjkNgrams(value)].filter((gram) => sourceNgrams.has(gram)).length;
+    const cjkHits = [...cjkNgrams(value)].filter((gram) =>
+      sourceNgrams.has(gram),
+    ).length;
     return asciiHits + cjkHits >= 2 ? value : null;
   }
 
   private hasCompleteAiEvidence(
     scores: AiDirectionScores,
-    evidenceByDirection: Partial<Record<Direction, Record<string, ScoringEvidence[]>>>,
+    evidenceByDirection: Partial<
+      Record<Direction, Record<string, ScoringEvidence[]>>
+    >,
   ): boolean {
     let hasAnyNonZero = false;
     for (const [rawDirection, rawValues] of Object.entries(scores)) {
@@ -1159,7 +1254,9 @@ export class AiScoringService {
       const direction = this.normalizeEvidenceDirection(rawDirection);
       if (!direction) continue;
       const verified = evidenceByDirection[direction] || {};
-      for (const [dimension, rawValue] of Object.entries(rawValues as Record<string, unknown>)) {
+      for (const [dimension, rawValue] of Object.entries(
+        rawValues as Record<string, unknown>,
+      )) {
         const proposed = this.clampDirectionScore(rawValue);
         if (proposed === 0) continue;
         hasAnyNonZero = true;
@@ -1171,7 +1268,12 @@ export class AiScoringService {
       }
     }
     // An all-zero, schema-valid response has no unsupported claim to publish.
-    return !hasAnyNonZero || Object.values(evidenceByDirection).some((value) => value && Object.keys(value).length > 0);
+    return (
+      !hasAnyNonZero ||
+      Object.values(evidenceByDirection).some(
+        (value) => value && Object.keys(value).length > 0,
+      )
+    );
   }
 
   private validateEvidenceItem(
@@ -1196,8 +1298,16 @@ export class AiScoringService {
 
     // Evidence must be literally traceable to the submitted article, not an
     // AI-generated paraphrase. A missing claim tuple cannot establish a fact.
-    if (!proposedScore || !quote || !articleText.includes(quote)
-      || !subject || !predicate || !object || !certainty || !fields) {
+    if (
+      !proposedScore ||
+      !quote ||
+      !articleText.includes(quote) ||
+      !subject ||
+      !predicate ||
+      !object ||
+      !certainty ||
+      !fields
+    ) {
       return null;
     }
 
@@ -1206,20 +1316,29 @@ export class AiScoringService {
       Math.max(0, quoteIndex - 24),
       Math.min(articleText.length, quoteIndex + quote.length + 24),
     );
-    const isUncertain = certainty === 'planned' || certainty === 'claimed'
-      || certainty === 'rumor' || this.hasNegatedOrUncertainContext(context);
+    const isUncertain =
+      certainty === 'planned' ||
+      certainty === 'claimed' ||
+      certainty === 'rumor' ||
+      this.hasNegatedOrUncertainContext(context);
     const hasClaimTupleInQuote = this.claimTupleMatchesQuote(
       quote,
       subject,
       predicate,
       object,
     );
-    const score = proposedScore === DIMENSION_FULL
-      && (!hasClaimTupleInQuote
-        || !this.hasRequiredEvidenceFields(direction, raw.dimension, fields, quote)
-        || isUncertain)
-      ? DIMENSION_HALF
-      : proposedScore;
+    const score =
+      proposedScore === DIMENSION_FULL &&
+      (!hasClaimTupleInQuote ||
+        !this.hasRequiredEvidenceFields(
+          direction,
+          raw.dimension,
+          fields,
+          quote,
+        ) ||
+        isUncertain)
+        ? DIMENSION_HALF
+        : proposedScore;
 
     return {
       direction,
@@ -1230,14 +1349,16 @@ export class AiScoringService {
       predicate,
       object,
       certainty,
-      status: typeof raw.status === 'string' ? raw.status.slice(0, 80) : undefined,
+      status:
+        typeof raw.status === 'string' ? raw.status.slice(0, 80) : undefined,
       fields,
     };
   }
 
   private normalizeEvidenceDirection(value: unknown): Direction | null {
     if (typeof value !== 'string') return null;
-    if (ALL_DIRECTION_IDS.includes(value as Direction)) return value as Direction;
+    if (ALL_DIRECTION_IDS.includes(value as Direction))
+      return value as Direction;
     return LEGACY_DIRECTION_MAP[value] ?? null;
   }
 
@@ -1248,24 +1369,34 @@ export class AiScoringService {
   }
 
   private readEvidenceCertainty(value: unknown): EvidenceCertainty | null {
-    return value === 'fact' || value === 'announced' || value === 'planned'
-      || value === 'claimed' || value === 'rumor'
+    return value === 'fact' ||
+      value === 'announced' ||
+      value === 'planned' ||
+      value === 'claimed' ||
+      value === 'rumor'
       ? value
       : null;
   }
 
   private readEvidenceFields(value: unknown): Record<string, unknown> | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return null;
     const entries = Object.entries(value as Record<string, unknown>).filter(
-      ([key, fieldValue]) => key.length > 0 && key.length <= 64
-        && (typeof fieldValue === 'string' || typeof fieldValue === 'number'
-          || typeof fieldValue === 'boolean' || Array.isArray(fieldValue)),
+      ([key, fieldValue]) =>
+        key.length > 0 &&
+        key.length <= 64 &&
+        (typeof fieldValue === 'string' ||
+          typeof fieldValue === 'number' ||
+          typeof fieldValue === 'boolean' ||
+          Array.isArray(fieldValue)),
     );
     return entries.length > 0 ? Object.fromEntries(entries) : null;
   }
 
   private hasNegatedOrUncertainContext(context: string): boolean {
-    return /\b(?:not|no|without|never|failed|unavailable|rumored|rumour|pending|intent(?:s|ion)?|intend(?:s|ed)?|plans?\s+to|will|shall|may|might|could|preview|demo|not\s+deployed|to\s+be\s+deployed)\b|未|没有|尚未|待|等待|计划|拟|预计|(?<!已)将|意图|打算|传闻|据称|可能|预览|演示|尚未部署/i.test(context);
+    return /\b(?:not|no|without|never|failed|unavailable|rumored|rumour|pending|intent(?:s|ion)?|intend(?:s|ed)?|plans?\s+to|will|shall|may|might|could|preview|demo|not\s+deployed|to\s+be\s+deployed)\b|未|没有|尚未|待|等待|计划|拟|预计|(?<!已)将|意图|打算|传闻|据称|可能|预览|演示|尚未部署/i.test(
+      context,
+    );
   }
 
   private claimTupleMatchesQuote(
@@ -1280,7 +1411,9 @@ export class AiScoringService {
       // Chinese single-character function words such as "为" are valid
       // predicates in a structured fact; do not reject their evidence solely
       // because an English-oriented minimum length would be two characters.
-      return normalizedValue.length >= 1 && normalizedQuote.includes(normalizedValue);
+      return (
+        normalizedValue.length >= 1 && normalizedQuote.includes(normalizedValue)
+      );
     });
   }
 
@@ -1294,14 +1427,16 @@ export class AiScoringService {
     fields: Record<string, unknown>,
     quote: string,
   ): boolean {
-    const present = (...keys: string[]) => keys.every((key) => {
-      const value = fields[key];
-      return value !== undefined && value !== null && value !== '';
-    });
-    const oneOf = (...keys: string[]) => keys.some((key) => {
-      const value = fields[key];
-      return value !== undefined && value !== null && value !== '';
-    });
+    const present = (...keys: string[]) =>
+      keys.every((key) => {
+        const value = fields[key];
+        return value !== undefined && value !== null && value !== '';
+      });
+    const oneOf = (...keys: string[]) =>
+      keys.some((key) => {
+        const value = fields[key];
+        return value !== undefined && value !== null && value !== '';
+      });
 
     const requirement = getDirectionEvidenceRequirement(direction, dimension);
     if (!requirement || !present(...requirement.required)) {
@@ -1312,20 +1447,31 @@ export class AiScoringService {
     // one alternative supporting fact, but it must also be present in the
     // quote; a made-up metric, amount, version, or deployment scope cannot
     // complete a five-point score.
-    if (!requirement.required.every((key) =>
-      this.fieldValueMatchesQuote(key, fields[key], quote))) {
+    if (
+      !requirement.required.every((key) =>
+        this.fieldValueMatchesQuote(key, fields[key], quote),
+      )
+    ) {
       return false;
     }
-    if (requirement.oneOf && (!oneOf(...requirement.oneOf)
-      || !requirement.oneOf.some((key) =>
-        fields[key] !== undefined && fields[key] !== null && fields[key] !== ''
-        && this.fieldValueMatchesQuote(key, fields[key], quote)))) {
+    if (
+      requirement.oneOf &&
+      (!oneOf(...requirement.oneOf) ||
+        !requirement.oneOf.some(
+          (key) =>
+            fields[key] !== undefined &&
+            fields[key] !== null &&
+            fields[key] !== '' &&
+            this.fieldValueMatchesQuote(key, fields[key], quote),
+        ))
+    ) {
       return false;
     }
 
     if (dimension === 'modality_coverage') {
       const modalities = fields.modalities;
-      if (!Array.isArray(modalities) || new Set(modalities).size < 2) return false;
+      if (!Array.isArray(modalities) || new Set(modalities).size < 2)
+        return false;
     }
 
     return true;
@@ -1337,8 +1483,10 @@ export class AiScoringService {
     quote: string,
   ): boolean {
     if (Array.isArray(value)) {
-      return value.length > 0 && value.every((item) =>
-        this.fieldValueMatchesQuote(key, item, quote));
+      return (
+        value.length > 0 &&
+        value.every((item) => this.fieldValueMatchesQuote(key, item, quote))
+      );
     }
     if (typeof value !== 'string' && typeof value !== 'number') return false;
     const rawValue = String(value).trim();
@@ -1348,9 +1496,12 @@ export class AiScoringService {
     // text remains Chinese or a different product vocabulary.
     if (key === 'status') {
       const statusPatterns: Record<string, RegExp> = {
-        deployed: /deploy|部署|上线|量产|投产|生产/, production: /production|生产|量产/,
-        ga: /\bga\b|正式发布|全面上线/, pilot: /pilot|试点/,
-        completed: /complete|完成/, signed: /sign|签署/,
+        deployed: /deploy|部署|上线|量产|投产|生产/,
+        production: /production|生产|量产/,
+        ga: /\bga\b|正式发布|全面上线/,
+        pilot: /pilot|试点/,
+        completed: /complete|完成/,
+        signed: /sign|签署/,
       };
       const pattern = statusPatterns[rawValue.toLowerCase()];
       if (pattern?.test(quote)) return true;
@@ -1360,8 +1511,10 @@ export class AiScoringService {
     // punctuation normalization but are still direct quantitative evidence.
     if (/^[^\p{L}\p{N}]+$/u.test(rawValue)) return quote.includes(rawValue);
     const normalizedValue = this.normalizeEvidenceText(rawValue);
-    return normalizedValue.length > 0
-      && this.normalizeEvidenceText(quote).includes(normalizedValue);
+    return (
+      normalizedValue.length > 0 &&
+      this.normalizeEvidenceText(quote).includes(normalizedValue)
+    );
   }
 
   private scoreFromVerifiedEvidence(
@@ -1491,7 +1644,8 @@ export class AiScoringService {
 
     const policy = getDirectionScoringPolicy(dir.id);
     const maxRaw = dir.dimensions.reduce(
-      (sum, dimension) => sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
+      (sum, dimension) =>
+        sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
       0,
     );
     let rawSum = 0;
@@ -1533,7 +1687,8 @@ export class AiScoringService {
     const dir = DIRECTIONS.find((d) => d.id === 'data_eval')!;
     const policy = getDirectionScoringPolicy('data_eval');
     const maxRaw = dir.dimensions.reduce(
-      (sum, dimension) => sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
+      (sum, dimension) =>
+        sum + DIMENSION_FULL * (policy.weights[dimension] ?? 1),
       0,
     );
     let rawSum = 0;
@@ -1601,9 +1756,10 @@ export class AiScoringService {
     text: string,
     sourceTier: string,
   ): GenericQualityScore {
-    const sourceCredibility = Math.min(10, Math.round(
-      (SOURCE_TIER_POINTS[sourceTier] ?? 8) / 2,
-    ));
+    const sourceCredibility = Math.min(
+      10,
+      Math.round((SOURCE_TIER_POINTS[sourceTier] ?? 8) / 2),
+    );
     const verifiability = this.computeVerifiability(text);
     const completeness = Math.min(4, Math.floor(text.length / 1200));
     const impactSignal = this.computeImpact(text);
