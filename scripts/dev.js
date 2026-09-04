@@ -5,29 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const readline = require('readline');
+const { loadEnv } = require('./load-env');
 
 // ── Project root ──────────────────────────────────────────────────────────────
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 process.chdir(PROJECT_ROOT);
 
-// ── Load .env ─────────────────────────────────────────────────────────────────
-function loadEnv() {
-  const envPath = path.join(PROJECT_ROOT, '.env');
-  if (!fs.existsSync(envPath)) return;
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    const value = trimmed.slice(eqIdx + 1).trim();
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
-}
-loadEnv();
+// ── Load .env and .env.local ─────────────────────────────────────────────────
+loadEnv({ rootDir: PROJECT_ROOT });
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 const LOG_DIR = process.env.LOG_DIR || 'logs';
