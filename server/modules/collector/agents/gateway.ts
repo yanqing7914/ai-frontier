@@ -8,7 +8,7 @@ import type {
   AgentInvocationRequest,
   AgentInvocationResult,
   ExternalProviderRequest,
-  MiaodaCapabilityExecutor,
+  CapabilityExecutor,
   AgentRegistry,
   AgentRole,
   AgentRuntimeConfig,
@@ -74,17 +74,17 @@ export type AgentGatewayHandler = (
 
 /**
  * Options accepted by the gateway. The aliases keep this seam convenient for
- * hosts that already call the Miaoda adapter a capability service or adapter.
+ * Hosts can provide a capability adapter or an external provider.
  */
 export interface AgentGatewayOptions extends AgentInvocationOptions {
   /** Compatibility switch for legacy direct capability consumers. */
   omitUndefinedContext?: boolean;
-  /** Local contract handlers are optional; external/Miaoda adapters are preferred. */
+  /** Local contract handlers are optional; external/Capability adapters are preferred. */
   handlers?: Partial<Record<AgentRole, AgentGatewayHandler>>;
   local?: Partial<Record<AgentRole, AgentGatewayHandler>>;
   /** Either an adapter container or a single load/invoke adapter. */
   adapter?: AgentCapabilityAdapters | AgentGatewayAdapter;
-  capabilityService?: AgentCapabilityAdapters['miaoda'];
+  capabilityService?: AgentCapabilityAdapters['capability'];
   externalProvider?: AgentCapabilityAdapters['external'];
   /** Optional host resolver hook. It is called only after static gates pass. */
   resolver?: (
@@ -110,7 +110,7 @@ export type AgentInvocationGatewayOptions = AgentGatewayOptions;
 
 /** Structural single-adapter form accepted by the compatibility seam. */
 export interface AgentGatewayAdapter {
-  load?: (capabilityId: string) => MiaodaCapabilityExecutor;
+  load?: (capabilityId: string) => CapabilityExecutor;
   invoke?: (request: ExternalProviderRequest) => Promise<unknown>;
 }
 
@@ -170,11 +170,11 @@ function normalizeAdapters(
   const directRecord = isRecord(direct) ? direct : undefined;
   const directLoad = directRecord?.load;
   const directInvoke = directRecord?.invoke;
-  const directMiaoda =
+  const directCapability =
     typeof directLoad === 'function'
       ? {
           load: (capabilityId: string) =>
-            (directLoad as (id: string) => MiaodaCapabilityExecutor).call(
+            (directLoad as (id: string) => CapabilityExecutor).call(
               directRecord,
               capabilityId,
             ),
@@ -193,12 +193,12 @@ function normalizeAdapters(
       : undefined;
   const container =
     directRecord &&
-    (isRecord(directRecord.miaoda) || isRecord(directRecord.external))
+    (isRecord(directRecord.capability) || isRecord(directRecord.external))
       ? {
-          ...(isRecord(directRecord.miaoda)
+          ...(isRecord(directRecord.capability)
             ? {
-                miaoda:
-                  directRecord.miaoda as unknown as AgentCapabilityAdapters['miaoda'],
+                capability:
+                  directRecord.capability as unknown as AgentCapabilityAdapters['capability'],
               }
             : {}),
           ...(isRecord(directRecord.external)
@@ -212,11 +212,11 @@ function normalizeAdapters(
   return {
     ...container,
     ...(options.adapters || {}),
-    ...(directMiaoda ? { miaoda: directMiaoda } : {}),
+    ...(directCapability ? { capability: directCapability } : {}),
     ...(directExternal ? { external: directExternal } : {}),
-    ...(options.capabilityService ? { miaoda: options.capabilityService } : {}),
+    ...(options.capabilityService ? { capability: options.capabilityService } : {}),
     ...(options.externalProvider ? { external: options.externalProvider } : {}),
-    ...(options.miaoda ? { miaoda: options.miaoda } : {}),
+    ...(options.capability ? { capability: options.capability } : {}),
     ...(options.external ? { external: options.external } : {}),
   };
 }
@@ -229,7 +229,7 @@ function normalizedInvocationOptions(
     environment: options.environment,
     secretManager: options.secretManager,
     adapters,
-    miaoda: adapters.miaoda,
+    capability: adapters.capability,
     external: adapters.external,
   };
 }
@@ -244,7 +244,7 @@ function staticInvocationOptions(
     // the static pass while preserving the adapter shape checks.
     environment: {},
     adapters,
-    miaoda: adapters.miaoda,
+    capability: adapters.capability,
     external: adapters.external,
   };
 }
@@ -512,12 +512,12 @@ export class AgentGateway {
       const contextValue = requestEnvelope.request.context;
       let output: unknown;
       if (agent.capability.invocation === 'available') {
-        const miaoda = adapters.miaoda;
+        const capability = adapters.capability;
         const capabilityId = agent.capability.capabilityId!;
         const action = agent.capability.action!;
         // getAgentInvocationGates only inspected the adapter shape. This is
         // the first point at which the host capability is loaded and called.
-        const executor = miaoda!.load(capabilityId);
+        const executor = capability!.load(capabilityId);
         if (!executor || typeof executor.call !== 'function') {
           return failure(role, 'adapter_required', 'failed', 'adapter');
         }

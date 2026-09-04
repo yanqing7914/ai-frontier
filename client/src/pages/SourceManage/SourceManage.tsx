@@ -44,7 +44,7 @@ import {
   EmptyDescription,
 } from '@/components/ui/empty';
 import { Database } from 'lucide-react';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import type {
   FeedSourceListItem,
   FeedSourceHealth,
@@ -60,7 +60,7 @@ import {
   toggleFeedSource,
   getFeedSourceHealth,
 } from '@client/src/api/feed-source';
-import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
+import { UniversalLink } from '@/components/UniversalLink';
 
 const feedSourceSchema = z.object({
   name: z.string().min(1, '名称不能为空'),

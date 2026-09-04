@@ -1,11 +1,5 @@
-import { NotFoundRender } from "@lark-apaas/client-toolkit/components/NotFoundRender";
-
 const NotFound = () => {
-  return (
-    <>
-      <NotFoundRender />
-    </>
-  );
+  return <div className="p-8 text-center text-muted-foreground">页面不存在</div>;
 };
 
 export default NotFound;

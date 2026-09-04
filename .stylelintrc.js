@@ -1,7 +1,8 @@
-const { stylelintPresetsOfSimple } = require('@lark-apaas/fullstack-presets');
-
 module.exports = {
-  extends: [ stylelintPresetsOfSimple ],
+  // Keep a small, dependency-free baseline now that the platform preset is gone.
+  rules: {
+    'declaration-block-no-duplicate-properties': true,
+  },
   ignoreFiles: [
     'node_modules/**',
     'dist/**',

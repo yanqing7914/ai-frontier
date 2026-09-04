@@ -6,12 +6,8 @@ export class ViewController {
 
   @Get(['/', '*'])
   @Render('index')
-  async render(@Req() req: Request): Promise<{ __platform__: string }>  {
-    // you can add custom render params here
-    const platformData = req.__platform_data__ ?? {};
+  async render(@Req() _req: Request): Promise<Record<string, never>>  {
     return {
-      // don't delete this line, it's used by client to get platform info
-      __platform__: JSON.stringify(platformData),
     };
   }
 }

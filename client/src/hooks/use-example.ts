@@ -1,6 +1,6 @@
 // import { useState, useEffect } from 'react';
-// import { axiosForBackend } from '@lark-apaas/client-toolkit/utils/getAxiosForBackend';
-// import { logger } from '@lark-apaas/client-toolkit/logger';
+// import { http } from '@/lib/http';
+// import { logger } from '@/lib/logger';
 
 // interface RecordData {
 //   title?: string,
@@ -28,7 +28,7 @@
 //       setData(prev => ({ ...prev, loading: true, error: null }));
 
 //       // 使用axios实例获取数据
-//       const response = await axiosForBackend.get('/api/hello');
+//       const response = await http.get('/api/hello');
 
 //       // 提取响应数据中的 data 字段
 //       const record = response.data.data;

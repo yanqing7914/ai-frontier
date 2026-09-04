@@ -53,7 +53,7 @@ describe('AiScoringService agent registry gate', () => {
           },
         },
       }),
-      { environment: { [key]: 'value' }, adapters: { miaoda: { load } } },
+      { environment: { [key]: 'value' }, adapters: { capability: { load } } },
     );
     await service.scoreArticle(article[0], article[1], 'authoritative');
     expect(load).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ describe('AiScoringService agent registry gate', () => {
     const load = jest.fn();
     const service = new AiScoringService({ load } as any, registryWith(), {
       environment: {},
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     });
     await service.scoreArticle(article[0], article[1], 'authoritative');
     expect(load).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe('AiScoringService agent registry gate', () => {
       registryWith({ enabled: false, status: 'disabled' }),
       {
         environment: { [key]: 'value' },
-        adapters: { miaoda: { load } },
+        adapters: { capability: { load } },
       },
     );
     await service.scoreArticle(article[0], article[1], 'authoritative');
@@ -87,7 +87,7 @@ describe('AiScoringService agent registry gate', () => {
     const load = jest.fn();
     const service = new AiScoringService({ load } as any, registryWith(), {
       environment: { [key]: 'value' },
-      adapters: { miaoda: {} as any },
+      adapters: { capability: {} as any },
     });
     await service.scoreArticle(article[0], article[1], 'authoritative');
     expect(load).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe('AiScoringService agent registry gate', () => {
     const service = new AiScoringService(
       { load: capabilityLoad } as any,
       registryWith(),
-      { environment: { [key]: 'value' }, adapters: { miaoda: { load } } },
+      { environment: { [key]: 'value' }, adapters: { capability: { load } } },
     );
     await service.scoreArticle(article[0], article[1], 'authoritative');
     expect(capabilityLoad).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ import {
   getWorkbenchArticles,
   getArticleScores,
 } from '@client/src/api/article';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import { ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';

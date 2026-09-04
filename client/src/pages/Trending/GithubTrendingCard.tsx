@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Star, ExternalLink } from 'lucide-react';
 import dayjs from 'dayjs';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { getGithubTrending } from '@/api/hotlist';
 import type { GithubTrendingItem, HotlistResponse } from '@shared/api.interface';
-import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
+import { UniversalLink } from '@/components/UniversalLink';
 
 const LANGUAGE_COLORS: Record<string, string> = {
   TypeScript: 'hsl(220,75%,45%)',

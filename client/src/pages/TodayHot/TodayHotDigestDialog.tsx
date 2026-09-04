@@ -8,7 +8,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { FileText } from 'lucide-react';
 import { toast } from 'sonner';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { getDailyDigest } from '@/api/article';
 import type { DailyDigest, Direction } from '@shared/api.interface';
 

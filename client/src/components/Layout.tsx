@@ -1,6 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { Flame, Github, TrendingUp, LayoutDashboard, Database } from 'lucide-react';
-import { useAppInfo } from '@lark-apaas/client-toolkit/hooks/useAppInfo';
 import { cn } from '@client/src/lib/utils';
 
 interface NavItem {
@@ -18,15 +17,13 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const Layout = () => {
-  const { appName } = useAppInfo();
-
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border bg-card">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <span className="text-base font-semibold tracking-tight text-foreground">
-              {appName || 'AI 前沿资讯'}
+              AI 前沿资讯
             </span>
           </div>
           <nav className="flex items-center gap-1 overflow-x-auto">

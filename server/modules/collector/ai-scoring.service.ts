@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger, Optional } from '@nestjs/common';
-import { CapabilityService } from '@lark-apaas/fullstack-nestjs-core';
+import { CapabilityService } from '../../infrastructure/capability.service';
 import {
   createAgentGateway,
   createAgentRegistry,
@@ -768,8 +768,8 @@ export class AiScoringService {
             ...this.agentInvocationOptions,
             adapters: {
               ...(this.agentInvocationOptions.adapters || {}),
-              miaoda:
-                capabilityService as unknown as AgentInvocationOptions['miaoda'],
+              capability:
+                capabilityService as unknown as AgentInvocationOptions['capability'],
             },
             omitUndefinedContext: true,
           };

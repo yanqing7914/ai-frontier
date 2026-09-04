@@ -1,9 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import {
-  DRIZZLE_DATABASE,
-  type PostgresJsDatabase,
-  CapabilityService,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE } from '../../infrastructure/database';
+import type { PostgresJsDatabase } from '../../infrastructure/database';
+import { CapabilityService } from '../../infrastructure/capability.service';
 import { eq } from 'drizzle-orm';
 import { hotlistSnapshot } from '@server/database/schema';
 import type {

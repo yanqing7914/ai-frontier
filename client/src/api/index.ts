@@ -1,5 +1,5 @@
-import { logger } from '@lark-apaas/client-toolkit/logger';
-import { axiosForBackend } from '@lark-apaas/client-toolkit/utils/getAxiosForBackend';
+import { logger } from '@/lib/logger';
+import { http } from '@/lib/http';
 
 export * as feedSource from './feed-source';
 export * as article from './article';

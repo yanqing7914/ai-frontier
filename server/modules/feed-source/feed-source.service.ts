@@ -5,10 +5,8 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  DRIZZLE_DATABASE,
-  type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE } from '../../infrastructure/database';
+import type { PostgresJsDatabase } from '../../infrastructure/database';
 import { eq, and, count, sql, isNull, lte, or } from 'drizzle-orm';
 import { feedSource } from '@server/database/schema';
 import type {

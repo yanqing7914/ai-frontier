@@ -1,14 +1,20 @@
 const tseslint = require('typescript-eslint');
-const { eslintPresetsOfSimple } = require('@lark-apaas/fullstack-presets');
 
 module.exports = tseslint.config(
   { ignores: ['dist', 'dist-server', 'node_modules', 'client/src/api/gen', '**/*.d.ts', '**/*.js.map'] },
+  {
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+      },
+    },
+  },
   // Client configuration
   {
     files: ['client/**/*.{ts,tsx}', 'shared/**/*.{ts,tsx}'],
-    extends: [
-      ...eslintPresetsOfSimple.client,
-    ],
     settings: {
       'import/resolver': {
         alias: {
@@ -25,9 +31,6 @@ module.exports = tseslint.config(
   // Server configuration
   {
     files: ['server/**/*.{ts,tsx}', 'shared/**/*.{ts,tsx}'],
-    extends: [
-      ...eslintPresetsOfSimple.server,
-    ],
     languageOptions: {
       parserOptions: {
         // Include server specs as well as production sources in typed linting.

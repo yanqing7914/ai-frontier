@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { ExternalLink } from 'lucide-react';
 import dayjs from 'dayjs';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { getWeiboHotSearch } from '@/api/hotlist';
 import type { WeiboHotItem, HotlistResponse } from '@shared/api.interface';
-import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
+import { UniversalLink } from '@/components/UniversalLink';
 
 function formatHotValue(value: number): string {
   if (value >= 10000) {

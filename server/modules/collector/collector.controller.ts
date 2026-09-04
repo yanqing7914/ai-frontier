@@ -5,7 +5,6 @@ import {
   HttpStatus,
   Post,
 } from '@nestjs/common';
-import { NeedLogin } from '@lark-apaas/fullstack-nestjs-core';
 import { CollectorService } from './collector.service';
 
 /**
@@ -16,7 +15,6 @@ import { CollectorService } from './collector.service';
 export class CollectorController {
   constructor(private readonly collectorService: CollectorService) {}
 
-  @NeedLogin()
   @Post('run')
   async runPipeline(): Promise<{ ok: true; accepted: true; message: string }> {
     let result: { accepted: boolean; reason?: string };
@@ -49,7 +47,6 @@ export class CollectorController {
   }
 
   /** Lets callers observe the real outcome of a detached run. */
-  @NeedLogin()
   @Get('status')
   async getStatus(): Promise<{
     ok: true;
@@ -68,7 +65,6 @@ export class CollectorController {
     }
   }
 
-  @NeedLogin()
   @Post('select-front-page')
   async selectFrontPage(): Promise<{ ok: true; message: string }> {
     try {
@@ -85,7 +81,6 @@ export class CollectorController {
     }
   }
 
-  @NeedLogin()
   @Post('rescore-pending')
   async rescorePending(): Promise<{
     ok: true;

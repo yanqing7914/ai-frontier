@@ -46,7 +46,7 @@ const sleep = (ms: number): Promise<void> =>
 
 /**
  * Executes injected local contract handlers only after the same gates exposed
- * by the invocation-plan API. The runtime never calls a provider or Miaoda
+ * by the invocation-plan API. The runtime never calls a provider or Capability
  * service itself; those remain host-owned adapter responsibilities.
  */
 export class AgentRuntime {

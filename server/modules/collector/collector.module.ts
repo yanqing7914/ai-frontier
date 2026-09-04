@@ -10,7 +10,7 @@ import {
 } from './ai-scoring.service';
 import { createAgentGateway, createAgentRegistry } from './agents';
 import type { AgentInvocationOptions, AgentRegistry } from './agents';
-import { CapabilityService } from '@lark-apaas/fullstack-nestjs-core';
+import { CapabilityService } from '../../infrastructure/capability.service';
 import { CollectorService } from './collector.service';
 import { CollectorController } from './collector.controller';
 import { CollectorAutomation } from './collector.automation';
@@ -25,7 +25,7 @@ import { CollectorAutomation } from './collector.automation';
       inject: [CapabilityService],
       useFactory: (capabilityService: CapabilityService) => ({
         environment: process.env,
-        adapters: { miaoda: capabilityService },
+        adapters: { capability: capabilityService },
       }),
     },
     {

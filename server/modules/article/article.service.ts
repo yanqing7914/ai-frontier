@@ -1,7 +1,5 @@
-import {
-  DRIZZLE_DATABASE,
-  type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE } from '../../infrastructure/database';
+import type { PostgresJsDatabase } from '../../infrastructure/database';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import {
   eq,

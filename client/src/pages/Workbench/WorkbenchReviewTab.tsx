@@ -10,7 +10,7 @@ import {
 } from '@client/src/components/ui/select';
 import { Empty, EmptyTitle, EmptyDescription } from '@client/src/components/ui/empty';
 import { getReviews, processReview } from '@client/src/api/article';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import type { ReviewItem, ReviewStatus } from '@shared/api.interface';

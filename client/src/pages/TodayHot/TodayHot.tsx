@@ -19,12 +19,12 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/zh-cn';
 import { toast } from 'sonner';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { getHotArticles } from '@/api/article';
 import { DigestDialog } from './TodayHotDigestDialog';
 import type { HotArticleItem, Direction } from '@shared/api.interface';
 import { DIRECTIONS as DIRECTION_META } from '@shared/directions';
-import { UniversalLink } from '@lark-apaas/client-toolkit/components/UniversalLink';
+import { UniversalLink } from '@/components/UniversalLink';
 
 dayjs.extend(relativeTime);
 dayjs.locale('zh-cn');

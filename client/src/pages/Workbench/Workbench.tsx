@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Badge } from '@client/src/components/ui/badge';
 import { getWorkbenchOverview } from '@client/src/api/article';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
 import {
   Newspaper,

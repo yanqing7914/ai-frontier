@@ -1,11 +1,8 @@
 import { Logger } from '@nestjs/common';
-import {
-  Automation,
-  BindTrigger,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { Injectable } from '@nestjs/common';
 import { CollectorService } from './collector.service';
 
-@Automation()
+@Injectable()
 export class CollectorAutomation {
   private readonly logger = new Logger(CollectorAutomation.name);
 
@@ -13,7 +10,6 @@ export class CollectorAutomation {
     private readonly collectorService: CollectorService,
   ) {}
 
-  @BindTrigger('ai_news_collection_pipeline')
   async runCollectionPipeline(): Promise<void> {
     this.logger.log('Starting AI news collection pipeline');
     // Acknowledge within the scheduler's ~10s dispatch budget; the run itself

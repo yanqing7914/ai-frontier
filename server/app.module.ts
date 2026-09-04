@@ -1,6 +1,7 @@
 import { APP_FILTER } from '@nestjs/core';
-import { Module } from '@nestjs/common';
-import { PlatformModule } from '@lark-apaas/fullstack-nestjs-core';
+import { Global, Module } from '@nestjs/common';
+import { DatabaseModule } from './infrastructure/database';
+import { CapabilityService } from './infrastructure/capability.service';
 
 import { GlobalExceptionFilter } from './common/filters/exception.filter';
 import { ViewModule } from './modules/view/view.module';
@@ -11,10 +12,10 @@ import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
 import { HotlistModule } from './modules/hotlist/hotlist.module';
 
+@Global()
 @Module({
   imports: [
-    // 平台 Module，提供平台能力
-    PlatformModule.forRoot(),
+    DatabaseModule,
     // ====== @route-section: business-modules START ======
     FeedSourceModule,
     ArticleModule,
@@ -29,10 +30,12 @@ import { HotlistModule } from './modules/hotlist/hotlist.module';
     ViewModule,
   ],
   providers: [
+    CapabilityService,
     {
       provide: APP_FILTER,
       useClass: GlobalExceptionFilter,
     },
   ],
+  exports: [CapabilityService],
 })
 export class AppModule {}

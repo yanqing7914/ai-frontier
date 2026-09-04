@@ -117,7 +117,7 @@ describe('AgentGateway', () => {
       // A structurally valid adapter is required even when the local test
       // handler is selected for execution.
       adapters: {
-        miaoda: {
+        capability: {
           load: jest.fn(() => ({ call: jest.fn(async () => ({ ok: true })) })),
         },
       },
@@ -166,7 +166,7 @@ describe('AgentGateway', () => {
     registry.agents.content_evaluator.status = 'blocked';
     const gateway = new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     });
 
     const result = await gateway.invoke('content_evaluator', { input: 'text' });
@@ -198,7 +198,7 @@ describe('AgentGateway', () => {
 
     const result = await new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({
@@ -220,7 +220,7 @@ describe('AgentGateway', () => {
 
     const result = await new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: {} as never },
+      adapters: { capability: {} as never },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({
@@ -253,7 +253,7 @@ describe('AgentGateway', () => {
     });
     const gateway = new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     });
 
     const result = await gateway.invoke('content_filter', { input: 'text' });
@@ -278,7 +278,7 @@ describe('AgentGateway', () => {
     });
     const gateway = new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     });
 
     const result = await gateway.invoke('content_evaluator', {
@@ -312,7 +312,7 @@ describe('AgentGateway', () => {
 
     const result = await new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({ ok: true, status: 'completed' });
@@ -332,7 +332,7 @@ describe('AgentGateway', () => {
 
     const result = await new AgentGateway(registry, {
       resolver,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({
@@ -358,7 +358,7 @@ describe('AgentGateway', () => {
     });
     const options: AgentGatewayOptions = {
       environment,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     };
     const result = await new AgentGateway(registry, options).invoke(
       'content_filter',
@@ -387,7 +387,7 @@ describe('AgentGateway', () => {
     });
     const result = await new AgentGateway(registry, {
       environment,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({
@@ -409,7 +409,7 @@ describe('AgentGateway', () => {
 
     const result = await new AgentGateway(registry, {
       environment,
-      adapters: { miaoda: { load } },
+      adapters: { capability: { load } },
     }).invoke('content_filter', { input: 'text' });
 
     expect(result).toMatchObject({

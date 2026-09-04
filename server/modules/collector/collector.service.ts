@@ -1,8 +1,6 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import {
-  DRIZZLE_DATABASE,
-  type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE } from '../../infrastructure/database';
+import type { PostgresJsDatabase } from '../../infrastructure/database';
 import { eq, ne, inArray, and, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   article, feedSource, directionScore, qualityGate,

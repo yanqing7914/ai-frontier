@@ -78,7 +78,7 @@ export interface AgentAuditFields {
 }
 
 /**
- * This describes an optional Miaoda capability binding, not an invocation.
+ * This describes an optional capability binding, not an invocation.
  * A missing binding means the local contract processor remains the only path.
  */
 export interface CapabilityBinding {
@@ -89,19 +89,15 @@ export interface CapabilityBinding {
   invocation: 'not_configured' | 'adapter_only' | 'available';
 }
 
-/** A minimal Miaoda capability shape.  It is an adapter seam, not an
+/** A minimal capability shape. It is an adapter seam, not an
  * implementation and therefore cannot accidentally perform a platform call. */
-export interface MiaodaCapabilityExecutor {
+export interface CapabilityExecutor {
   call(action: string, input: unknown, context?: unknown): Promise<unknown>;
 }
 
-export interface MiaodaCapabilityServiceAdapter {
-  load(capabilityId: string): MiaodaCapabilityExecutor;
+export interface CapabilityServiceAdapter {
+  load(capabilityId: string): CapabilityExecutor;
 }
-
-/** Backward/forward compatible names for hosts that call this seam a
- * CapabilityService adapter or a capability client. */
-export type CapabilityServiceAdapter = MiaodaCapabilityServiceAdapter;
 
 /** External providers are supplied by the host application. */
 export interface ExternalProviderRequest {
@@ -119,7 +115,7 @@ export interface ExternalProviderAdapter {
 export type ExternalApiAdapter = ExternalProviderAdapter;
 
 export interface AgentCapabilityAdapters {
-  miaoda?: MiaodaCapabilityServiceAdapter;
+  capability?: CapabilityServiceAdapter;
   external?: ExternalProviderAdapter;
 }
 

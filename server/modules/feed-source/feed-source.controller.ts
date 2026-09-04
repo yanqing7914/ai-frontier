@@ -9,7 +9,6 @@ import {
   Query,
   Body,
 } from '@nestjs/common';
-import { NeedLogin } from '@lark-apaas/fullstack-nestjs-core';
 import { FeedSourceService } from './feed-source.service';
 import type {
   CreateFeedSourceRequest,
@@ -44,13 +43,11 @@ export class FeedSourceController {
     return this.feedSourceService.findOne(id);
   }
 
-  @NeedLogin()
   @Post()
   async create(@Body() dto: CreateFeedSourceRequest) {
     return this.feedSourceService.create(dto);
   }
 
-  @NeedLogin()
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -59,13 +56,11 @@ export class FeedSourceController {
     return this.feedSourceService.update(id, dto);
   }
 
-  @NeedLogin()
   @Delete(':id')
   async delete(@Param('id') id: string) {
     return this.feedSourceService.delete(id);
   }
 
-  @NeedLogin()
   @Patch(':id/toggle')
   async toggle(
     @Param('id') id: string,

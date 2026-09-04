@@ -6,7 +6,6 @@ import {
   Query,
   Body,
 } from '@nestjs/common';
-import { NeedLogin } from '@lark-apaas/fullstack-nestjs-core';
 import { ReviewService } from './review.service';
 import type { ReviewActionRequest } from '@shared/api.interface';
 
@@ -27,7 +26,6 @@ export class ReviewController {
     });
   }
 
-  @NeedLogin()
   @Patch(':id')
   async processReview(
     @Param('id') id: string,

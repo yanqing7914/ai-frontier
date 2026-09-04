@@ -36,7 +36,7 @@ export interface AgentInvocationOptions extends SecretResolverOptions {
   omitUndefinedContext?: boolean;
   /** Either form is accepted so hosts can pass their adapter container. */
   adapters?: AgentCapabilityAdapters;
-  miaoda?: AgentCapabilityAdapters['miaoda'];
+  capability?: AgentCapabilityAdapters['capability'];
   external?: AgentCapabilityAdapters['external'];
 }
 
@@ -1001,14 +1001,14 @@ export interface CapabilityInvocationPlan {
   credentialRequired: true;
   verificationRequired: true;
   enabledRequired: true;
-  adapterKind: 'local_contract' | 'miaoda' | 'external';
+  adapterKind: 'local_contract' | 'capability' | 'external';
   reason: string;
 }
 
 function adapterFor(options: AgentInvocationOptions): AgentCapabilityAdapters {
   return {
     ...(options.adapters || {}),
-    ...(options.miaoda ? { miaoda: options.miaoda } : {}),
+    ...(options.capability ? { capability: options.capability } : {}),
     ...(options.external ? { external: options.external } : {}),
   };
 }
@@ -1032,8 +1032,8 @@ export function getAgentInvocationGates(
     adapter =
       nonEmptyString(agent.capability?.capabilityId) &&
       nonEmptyString(agent.capability?.action) &&
-      Boolean(adapters.miaoda) &&
-      typeof adapters.miaoda?.load === 'function';
+      Boolean(adapters.capability) &&
+      typeof adapters.capability?.load === 'function';
   } else if (agent.provider !== 'contract-local') {
     adapter =
       Boolean(adapters.external) &&
@@ -1068,7 +1068,7 @@ export function buildCapabilityInvocationPlan(
   if (!gates.adapter) blockedBy.push('adapter');
   const adapterKind: CapabilityInvocationPlan['adapterKind'] =
     agent.capability?.invocation !== 'not_configured'
-      ? 'miaoda'
+      ? 'capability'
       : agent.provider === 'contract-local'
         ? 'local_contract'
         : 'external';
