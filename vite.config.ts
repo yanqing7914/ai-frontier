@@ -10,6 +10,14 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    // Keep local API calls on the same origin while forwarding them to Nest.
+    // Without this, Vite's SPA fallback returns index.html for `/api/*`.
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+    },
   },
   resolve: {
     alias: {
