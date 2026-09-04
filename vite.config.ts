@@ -14,6 +14,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'client/src'),
+      // Keep Vite aligned with the TypeScript path used by existing client modules.
+      '@client': path.resolve(__dirname, 'client'),
+      '@shared': path.resolve(__dirname, 'shared'),
     },
   },
 });
