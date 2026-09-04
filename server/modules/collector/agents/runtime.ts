@@ -105,14 +105,18 @@ export class AgentRuntime {
           records.find((record) => record.role === dependency)?.status !==
           'completed',
       );
-      if (!agent.enabled || dependencyFailed) {
+      if (!agent.enabled || dependencyFailed || agent.status !== 'active') {
         records.push({
           role,
           status: 'skipped',
           outcome: 'skipped',
           output: input,
           attempts: 0,
-          reason: !agent.enabled ? 'disabled' : 'dependency_failed',
+          reason: !agent.enabled
+            ? 'disabled'
+            : dependencyFailed
+              ? 'dependency_failed'
+              : 'disabled',
         });
         if (overall !== 'failed') overall = 'degraded';
         continue;

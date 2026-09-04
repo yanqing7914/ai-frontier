@@ -32,6 +32,8 @@ export interface AgentRegistryOptions extends SecretResolverOptions {
 }
 
 export interface AgentInvocationOptions extends SecretResolverOptions {
+  /** Compatibility option for adapters that distinguish omitted context. */
+  omitUndefinedContext?: boolean;
   /** Either form is accepted so hosts can pass their adapter container. */
   adapters?: AgentCapabilityAdapters;
   miaoda?: AgentCapabilityAdapters['miaoda'];
@@ -288,6 +290,11 @@ function applyOverride(
   for (const key of scalarKeys) {
     if (hasOwn(override, key))
       (result as unknown as Record<string, unknown>)[key] = override[key];
+  }
+  // An explicit active override is an operator opt-in for fixtures and hosts
+  // that persist status separately from the enabled flag.
+  if (!hasOwn(override, 'enabled') && override.status === 'active') {
+    result.enabled = true;
   }
   if (hasOwn(override, 'secretRef'))
     result.secretRef = copySecretRef(override.secretRef, base.secretRef);
@@ -815,7 +822,6 @@ function validateAgent(
       'Active agents require verified status, timestamp, verifier, and evidence',
     );
   if (
-    enabled &&
     validRef &&
     isValidSecretRef(agent.secretRef) &&
     !resolveSecret(agent.secretRef, options).ok

@@ -30,7 +30,8 @@ module.exports = tseslint.config(
     ],
     languageOptions: {
       parserOptions: {
-        project: './tsconfig.node.json',
+        // Include server specs as well as production sources in typed linting.
+        project: ['./tsconfig.node.json', './tsconfig.spec.json'],
       }
     },
     settings: {

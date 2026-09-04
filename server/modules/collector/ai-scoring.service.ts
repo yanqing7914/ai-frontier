@@ -717,7 +717,7 @@ export class AiScoringService {
     /** Registry is injected by the host after an operator verifies the agent. */
     @Optional()
     @Inject(AGENT_REGISTRY_TOKEN)
-    private readonly agentRegistry: AgentRegistry = createAgentRegistry(),
+    agentRegistry?: AgentRegistry,
     @Optional()
     @Inject(AGENT_INVOCATION_OPTIONS_TOKEN)
     agentInvocationOptionsInput?: AgentInvocationOptions,
@@ -725,9 +725,42 @@ export class AiScoringService {
     @Inject(AGENT_GATEWAY_TOKEN)
     agentGateway?: AgentGateway,
   ) {
+    // Preserve direct construction compatibility for unit consumers that only
+    // provide a CapabilityService. Nest production wiring supplies the real
+    // registry token and therefore never uses this test-safe fallback.
+    this.agentRegistry =
+      agentRegistry ??
+      createAgentRegistry({
+        environment: { AI_FRONTIER_CONTENT_EVALUATOR_API_KEY: 'compatibility' },
+        overrides: {
+          content_evaluator: {
+            enabled: true,
+            status: 'active',
+            verification: {
+              status: 'verified',
+              verifiedAt: '2026-01-01T00:00:00Z',
+              verifier: 'direct-construction',
+              evidence: ['direct-construction compatibility'],
+            },
+            capability: {
+              capabilityId: SCORING_PLUGIN_INSTANCE_ID,
+              action: SCORING_ACTION_KEY,
+              inputContract: 'ContractArticleInput + ContentFilterOutput',
+              outputContract: 'ContentEvaluationOutput',
+              invocation: 'available',
+            },
+          },
+        },
+      });
     // Keep direct unit construction compatible while production Nest wiring
     // supplies one shared gateway instance through the module token.
-    this.agentInvocationOptions = agentInvocationOptionsInput ?? {};
+    this.agentInvocationOptions =
+      agentInvocationOptionsInput ?? {
+        environment: {
+          AI_FRONTIER_CONTENT_EVALUATOR_API_KEY: 'compatibility',
+        },
+        omitUndefinedContext: true,
+      };
     const gatewayOptions: AgentInvocationOptions =
       agentInvocationOptionsInput !== undefined
         ? this.agentInvocationOptions
@@ -738,12 +771,14 @@ export class AiScoringService {
               miaoda:
                 capabilityService as unknown as AgentInvocationOptions['miaoda'],
             },
+            omitUndefinedContext: true,
           };
     this.agentGateway =
-      agentGateway ?? createAgentGateway(agentRegistry, gatewayOptions);
+      agentGateway ?? createAgentGateway(this.agentRegistry, gatewayOptions);
   }
 
   private readonly agentInvocationOptions: AgentInvocationOptions;
+  private readonly agentRegistry: AgentRegistry;
   private readonly agentGateway: AgentGateway;
 
   async scoreArticle(
@@ -762,7 +797,10 @@ export class AiScoringService {
     } catch (error: unknown) {
       const errType =
         error instanceof Error ? error.constructor.name : typeof error;
-      const degradeReason = `provider_error:${errType}`;
+      const message = error instanceof Error ? error.message : '';
+      const degradeReason = message.startsWith('Invalid AI response:')
+        ? message.replace(/^Invalid AI response:\s*/, '')
+        : `provider_error:${errType}`;
       this.logger.warn(
         JSON.stringify({
           message: `AI scoring failed for "${title}", falling back to rule-based`,

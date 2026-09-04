@@ -77,6 +77,8 @@ export type AgentGatewayHandler = (
  * hosts that already call the Miaoda adapter a capability service or adapter.
  */
 export interface AgentGatewayOptions extends AgentInvocationOptions {
+  /** Compatibility switch for legacy direct capability consumers. */
+  omitUndefinedContext?: boolean;
   /** Local contract handlers are optional; external/Miaoda adapters are preferred. */
   handlers?: Partial<Record<AgentRole, AgentGatewayHandler>>;
   local?: Partial<Record<AgentRole, AgentGatewayHandler>>;
@@ -519,10 +521,14 @@ export class AgentGateway {
         if (!executor || typeof executor.call !== 'function') {
           return failure(role, 'adapter_required', 'failed', 'adapter');
         }
-        output = await withTimeout(
-          Promise.resolve(executor.call(action, input, contextValue)),
-          timeoutMs(agent),
-        );
+        // The scoring capability historically accepts a two-argument call;
+        // preserve that adapter contract while retaining the explicit context
+        // slot for other capability integrations.
+        const result =
+          this.options.omitUndefinedContext && contextValue === undefined
+            ? executor.call(action, input)
+            : executor.call(action, input, contextValue);
+        output = await withTimeout(Promise.resolve(result), timeoutMs(agent));
       } else if (agent.provider !== 'contract-local') {
         const external = adapters.external!;
         output = await withTimeout(
@@ -597,7 +603,6 @@ export class AgentGateway {
   }
 }
 
-export type AgentInvocationGateway = AgentGateway;
 /** Runtime alias for hosts that instantiate the gateway by its longer name. */
 export const AgentInvocationGateway = AgentGateway;
 export const InvocationGateway = AgentGateway;
