@@ -3,7 +3,7 @@
 The workflows build `dist/` and publish it as a short-lived GitHub Actions artifact. The
 manual workflow is intentionally a packaging template: it does not open an SSH session or
 change infrastructure. Download the artifact from the workflow run and deploy `dist/` using
-the approved hosting mechanism for this environment (Miaoda, a container platform, or an
+the approved hosting mechanism for this environment (a container platform or an
 internal release system).
 
 The production process starts with `scripts/run.sh` from inside `dist/` and listens on
