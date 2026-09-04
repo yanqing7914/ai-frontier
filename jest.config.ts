@@ -9,6 +9,7 @@ const config: Config = {
     '<rootDir>/test/unit/**/*.spec.ts',
   ],
   moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/client/src/$1',
     '^@shared/(.*)$': '<rootDir>/shared/$1',
     '^@server/(.*)$': '<rootDir>/server/$1',
   },
