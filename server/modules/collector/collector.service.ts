@@ -359,25 +359,55 @@ export class CollectorService {
     this.pipelineRunning = true;
     const startedAt = new Date().toISOString();
     const leaseToken = crypto.randomUUID();
-    let leaseAcquired = false;
-    try {
-      leaseAcquired = await this.acquirePipelineLease(leaseToken);
-      if (!leaseAcquired) {
-        this.pipelineRunning = false;
-        this.logger.warn(`Pipeline run rejected (${trigger}): a database lease is already active`);
-        return { accepted: false, reason: 'a pipeline run is already in progress' };
-      }
-      await this.writeRunState({ status: 'running', trigger, startedAt });
-    } catch (error: unknown) {
-      this.pipelineRunning = false;
-      if (leaseAcquired) await this.releasePipelineLease(leaseToken);
-      throw error;
-    }
 
-    void this.runWithLease({ trigger, startedAt, leaseToken }).catch(() => undefined);
+    // Do not await database work here. Scheduler dispatchers commonly impose a
+    // ~10 second HTTP budget, while lease/state writes can block on a degraded
+    // database before the actual pipeline has even started.
+    void this.initializeDetachedRun({ trigger, startedAt, leaseToken });
 
     this.logger.log(`Pipeline run accepted (${trigger}); executing detached`);
     return { accepted: true };
+  }
+
+  /** Acquire the cross-instance lease and run the detached pipeline off-request. */
+  private async initializeDetachedRun(context: {
+    trigger: string;
+    startedAt: string;
+    leaseToken: string;
+  }): Promise<void> {
+    let leaseAcquired = false;
+    let pipelineStarted = false;
+    try {
+      leaseAcquired = await this.acquirePipelineLease(context.leaseToken);
+      if (!leaseAcquired) {
+        this.pipelineRunning = false;
+        this.logger.warn(`Pipeline run rejected (${context.trigger}): a database lease is already active`);
+        return;
+      }
+      await this.writeRunState({
+        status: 'running', trigger: context.trigger, startedAt: context.startedAt,
+      });
+      pipelineStarted = true;
+      await this.runWithLease(context);
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Pipeline could not be initialized (${context.trigger}): ${errMsg}`);
+      if (error instanceof Error && error.stack) this.logger.error(`Stack: ${error.stack}`);
+      if (leaseAcquired && !pipelineStarted) {
+        await this.releasePipelineLease(context.leaseToken).catch((releaseError: unknown) => {
+          this.logger.error(`Failed to release pipeline lease: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+        });
+      }
+      if (!pipelineStarted) {
+        await this.writeRunState({
+          status: 'failed', trigger: context.trigger, startedAt: context.startedAt,
+          finishedAt: new Date().toISOString(), error: errMsg,
+        }).catch((stateError: unknown) => {
+          this.logger.error(`Failed to persist pipeline initialization failure: ${stateError instanceof Error ? stateError.message : String(stateError)}`);
+        });
+      }
+      this.pipelineRunning = false;
+    }
   }
 
   /** Persist the outcome of the most recent run so a detached failure is never invisible. */
