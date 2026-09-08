@@ -252,15 +252,6 @@ async function main() {
 
   cleanStaleDist();
 
-  // Initialize action plugins
-  writeOutput('\n🔌 Initializing action plugins...\n');
-  try {
-    execSync('fullstack-cli action-plugin init', { cwd: PROJECT_ROOT, stdio: 'inherit' });
-    writeOutput('✅ Action plugins initialized\n\n');
-  } catch {
-    writeOutput('⚠️  Action plugin initialization failed, continuing anyway...\n\n');
-  }
-
   // Start server and client
   const serverPromise = startProcess({
     name: 'server',
