@@ -11,18 +11,27 @@ import { CollectorModule } from './modules/collector/collector.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
 import { HotlistModule } from './modules/hotlist/hotlist.module';
+import { HealthModule } from './modules/health/health.module';
+
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL);
+const applicationModules = hasDatabaseUrl
+  ? [
+      DatabaseModule,
+      FeedSourceModule,
+      ArticleModule,
+      CollectorModule,
+      DigestModule,
+      ReviewModule,
+      HotlistModule,
+    ]
+  : [];
 
 @Global()
 @Module({
   imports: [
-    DatabaseModule,
+    ...applicationModules,
     // ====== @route-section: business-modules START ======
-    FeedSourceModule,
-    ArticleModule,
-    CollectorModule,
-    DigestModule,
-    ReviewModule,
-    HotlistModule,
+    HealthModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last
