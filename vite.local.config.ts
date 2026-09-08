@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3000';
+
 export default defineConfig({
   root: path.resolve(__dirname),
   base: '/',
@@ -17,6 +19,6 @@ export default defineConfig({
     host: '127.0.0.1',
     port: Number(process.env.CLIENT_DEV_PORT || 5173),
     strictPort: true,
-    proxy: { '/api': 'http://127.0.0.1:3000' },
+    proxy: { '/api': apiProxyTarget },
   },
 });
