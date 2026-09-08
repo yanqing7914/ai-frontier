@@ -273,13 +273,18 @@ export interface HotlistResponse<T = GithubTrendingItem | WeiboHotItem> {
   ok: boolean;
   kind: HotlistKind;
   updatedAt: string;
-  source: 'live' | 'snapshot';
+  source: 'live' | 'snapshot' | 'none';
+  /** Why no live/snapshot data was available. */
+  reason?: 'no_snapshot' | 'snapshot_unavailable';
   items: T[];
 }
 
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
+  /** Present on feeds where an empty result is a meaningful system state. */
+  status?: 'ok' | 'empty';
+  reason?: 'no_published_articles_today';
 }
 
 export interface PaginationParams {
