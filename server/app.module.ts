@@ -11,6 +11,7 @@ import { CollectorModule } from './modules/collector/collector.module';
 import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
 import { HotlistModule } from './modules/hotlist/hotlist.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Global()
 @Module({
@@ -23,6 +24,7 @@ import { HotlistModule } from './modules/hotlist/hotlist.module';
     DigestModule,
     ReviewModule,
     HotlistModule,
+    HealthModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last
