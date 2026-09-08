@@ -111,7 +111,7 @@ export class HotlistService {
 
   private async loadSnapshot(
     kind: string,
-  ): Promise<{ items: unknown[]; updatedAt: string } | null> {
+  ): Promise<{ items: unknown[]; updatedAt: string; unavailable?: boolean } | null> {
     try {
       const [row] = await this.db
         .select()
@@ -126,7 +126,7 @@ export class HotlistService {
       this.logger.warn(
         `Failed to load snapshot for ${kind}: ${String(err)}`,
       );
-      return null;
+      return { items: [], updatedAt: new Date().toISOString(), unavailable: true };
     }
   }
 
@@ -412,6 +412,16 @@ export class HotlistService {
     kind: 'github' | 'weibo',
   ): Promise<HotlistResponse<T>> {
     const snapshot = await this.loadSnapshot(kind);
+    if (snapshot?.unavailable) {
+      return {
+        ok: false,
+        kind,
+        updatedAt: snapshot.updatedAt,
+        source: 'none',
+        reason: 'snapshot_unavailable',
+        items: [],
+      };
+    }
     if (snapshot) {
       return {
         ok: true,
@@ -426,7 +436,8 @@ export class HotlistService {
       ok: false,
       kind,
       updatedAt: new Date().toISOString(),
-      source: 'live',
+      source: 'none',
+      reason: 'no_snapshot',
       items: [],
     };
   }
