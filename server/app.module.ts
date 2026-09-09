@@ -12,8 +12,6 @@ import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
 import { HotlistModule } from './modules/hotlist/hotlist.module';
 import { HealthModule } from './modules/health/health.module';
-<<<<<<< HEAD
-
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL);
 const applicationModules = hasDatabaseUrl
   ? [
@@ -26,9 +24,6 @@ const applicationModules = hasDatabaseUrl
       HotlistModule,
     ]
   : [];
-=======
->>>>>>> ece7010 (fix: add backend health endpoint)
-
 @Global()
 @Module({
   imports: [
