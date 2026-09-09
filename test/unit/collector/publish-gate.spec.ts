@@ -173,6 +173,20 @@ describe('canPublishArticle', () => {
     })).toBe(false);
   });
 
+  it('allows audited rule-based publishing only with explicit degraded opt-in', () => {
+    expect(canPublishArticle({
+      primaryDirection: 'model',
+      primaryScore: 80,
+      status: 'draft',
+      dimensionScores: { entity: 5, capability: 5, performance: 5 },
+      evidence: modelEvidence,
+      publishThreshold: 75,
+      aiProcessed: false,
+      allowDegradedPublish: true,
+      traceStatus: 'first_party',
+    })).toBe(true);
+  });
+
   it('rejects a numeric score when its primary evidence was not persisted', () => {
     expect(canPublishArticle({ ...base, evidence: [] })).toBe(false);
   });
