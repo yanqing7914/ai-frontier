@@ -102,10 +102,9 @@ else
   # 拷贝 run.sh 到 dist/（prod 从 dist/ 启动，确保 cwd 一致性）
   cp "$ROOT_DIR/scripts/run.sh" "$DIST_DIR/"
 
-  # 拷贝 .env 文件（如果存在）
-  if [ -f "$ROOT_DIR/.env" ]; then
-    cp "$ROOT_DIR/.env" "$DIST_DIR/"
-  fi
+  # Runtime configuration must come from the target environment, never from a
+  # developer workstation copied into the distributable artifact.
+  echo "   [skip] 不复制 .env；请在服务器环境变量或密钥存储中提供运行配置"
 fi
 
 # 清理无用文件

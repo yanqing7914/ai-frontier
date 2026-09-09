@@ -1,8 +1,9 @@
 import axios from 'axios';
+import { resolveApiBaseUrl } from './api-base-url';
 import { validateApiResponse } from './validate-api-response';
 
 export const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/',
+  baseURL: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
   headers: { 'Content-Type': 'application/json' },
 });
 

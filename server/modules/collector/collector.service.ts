@@ -1130,6 +1130,10 @@ export class CollectorService {
     const maxConsecFail = await this.getBoundedConfig('source_max_consecutive_failures', 5, 0, 1000);
     const autoApproveHours = await this.getBoundedConfig('auto_approve_hours', 24, 1, 24 * 30);
     const autoApproveThreshold = await this.getBoundedConfig('auto_approve_threshold', 60, 0, 100);
+    // Rule-scored articles remain blocked by default when the AI provider is
+    // unavailable. Operators can explicitly opt into the audited degraded path
+    // without weakening evidence, provenance, link, or score checks.
+    const allowDegradedPublish = await this.getBooleanConfig('allow_degraded_publish', false);
 
     const autoApproved = await this.db.execute(sql`
       UPDATE article SET status = 'draft'
@@ -1237,7 +1241,11 @@ export class CollectorService {
     this.logger.log(`[11/12] quality_gate: passed=${gatePassedIds.size}, stale=${gateStale}, unreliable=${gateUnreliable}, dead=${gateDead}, dup=${gateDup}`);
 
     // ── Stage 12/12: publish_outputs ──
-    const publishedCount = await this.executePublishGate([...gatePassedIds].map((id) => ({ id })), publishThreshold);
+    const publishedCount = await this.executePublishGate(
+      [...gatePassedIds].map((id) => ({ id })),
+      publishThreshold,
+      allowDegradedPublish,
+    );
     await this.selectForFrontPage();
     await this.ensureDigest(today);
     this.logger.log(`[12/12] publish_outputs: published=${publishedCount}, digest=ensured (threshold=${publishThreshold})`);
@@ -1688,7 +1696,11 @@ export class CollectorService {
 
   // ─── Publish Gate ─────────────────────────────────────────
 
-  private async executePublishGate(articles: { id: string }[], publishThreshold: number): Promise<number> {
+  private async executePublishGate(
+    articles: { id: string }[],
+    publishThreshold: number,
+    allowDegradedPublish = false,
+  ): Promise<number> {
     if (articles.length === 0) return 0;
     const articleIds = articles.map((a) => a.id);
     const allArticles = await this.db
@@ -1742,6 +1754,7 @@ export class CollectorService {
         evidence: scoreMap.get(art.id)?.evidence ?? null,
         publishThreshold,
         aiProcessed: art.aiProcessed,
+        allowDegradedPublish,
         traceStatus: art.originStatus as 'first_party' | 'editorial' | 'verified_reference' | 'aggregator' | 'needs_review' | 'unknown' | null,
         provenanceOverride: art.provenanceOverride === true,
       });
@@ -1766,6 +1779,18 @@ export class CollectorService {
       ? config.value
       : Number(String(config.value));
     return Number.isFinite(value) ? value : defaultValue;
+  }
+  private async getBooleanConfig(key: string, defaultValue: boolean): Promise<boolean> {
+    const [config] = await this.db.select().from(appConfig).where(eq(appConfig.key, key));
+    if (!config) return defaultValue;
+    const value = config.value;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      if (/^(true|1|yes|on)$/i.test(value.trim())) return true;
+      if (/^(false|0|no|off)$/i.test(value.trim())) return false;
+    }
+    return defaultValue;
   }
   private async getBoundedConfig(key: string, defaultValue: number, min: number, max: number): Promise<number> {
     const value = await this.getConfig(key, defaultValue);

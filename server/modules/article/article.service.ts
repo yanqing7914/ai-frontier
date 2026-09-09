@@ -175,7 +175,9 @@ export class ArticleService {
       };
     });
 
-    return { items, total };
+    return items.length === 0
+      ? { items, total, status: 'empty', reason: 'no_published_articles_today' }
+      : { items, total, status: 'ok' };
   }
 
   /** Keep the read API in sync with the configurable collector publication gate. */

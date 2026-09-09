@@ -68,6 +68,8 @@ export interface PublishGateInput {
   publishThreshold: number;
   /** A published score must be backed by evidence validated from the AI output. */
   aiProcessed?: boolean;
+  /** Explicit opt-in for publishing rule-scored articles when AI is unavailable. */
+  allowDegradedPublish?: boolean;
   /** Explicit human provenance audit may override a pending trace. */
   provenanceOverride?: boolean;
   /** Only unverified aggregation/reposts are withheld from automatic publication. */
@@ -75,13 +77,17 @@ export interface PublishGateInput {
 }
 
 export function canPublishArticle(input: PublishGateInput): boolean {
-  const { primaryDirection, primaryScore, status, dimensionScores, evidence, publishThreshold, traceStatus, aiProcessed, provenanceOverride } = input;
+  const {
+    primaryDirection, primaryScore, status, dimensionScores, evidence,
+    publishThreshold, traceStatus, aiProcessed, allowDegradedPublish,
+    provenanceOverride,
+  } = input;
   if (!primaryDirection) return false;
   if (!normalizeDirection(primaryDirection)) return false;
   if (status === 'pending_review' || status === 'blocked') return false;
   // Provenance is an allow-list. Null, legacy values and aggregators fail closed.
   if ((!traceStatus || !['first_party', 'editorial', 'verified_reference'].includes(traceStatus)) && !provenanceOverride) return false;
-  if (aiProcessed === false) return false;
+  if (aiProcessed === false && allowDegradedPublish !== true) return false;
   if ((primaryScore ?? 0) < publishThreshold) return false;
   if (!hasCoreEvidence(dimensionScores, primaryDirection)) return false;
   if (!hasVerifiedPrimaryEvidence(evidence, primaryDirection, dimensionScores)) return false;
