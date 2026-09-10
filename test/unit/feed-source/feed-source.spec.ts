@@ -37,6 +37,7 @@ describe('feed source URL validation', () => {
     'http://service.internal/feed',
     'http://127.0.0.1/feed',
     'http://2130706433/feed',
+    'http://0x7f000001/feed',
     'http://10.1.2.3/feed',
     'http://172.16.0.1/feed',
     'http://192.168.1.1/feed',

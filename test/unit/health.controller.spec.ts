@@ -7,5 +7,6 @@ describe('HealthController', () => {
     expect(result.status).toBe('ok');
     expect(result.service).toBe('ai-frontier');
     expect(new Date(result.timestamp).toISOString()).toBe(result.timestamp);
+    expect(result.readiness.database).toBeDefined();
   });
 });

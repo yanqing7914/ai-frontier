@@ -5,7 +5,9 @@ import {
   Param,
   Query,
   Body,
+  UseGuards,
 } from '@nestjs/common';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
 import { ReviewService } from './review.service';
 import type { ReviewActionRequest } from '@shared/api.interface';
 
@@ -27,6 +29,7 @@ export class ReviewController {
   }
 
   @Patch(':id')
+  @UseGuards(AdminTokenGuard)
   async processReview(
     @Param('id') id: string,
     @Body() body: ReviewActionRequest,

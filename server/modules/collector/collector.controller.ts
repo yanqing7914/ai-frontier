@@ -4,8 +4,10 @@ import {
   HttpException,
   HttpStatus,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { CollectorService } from './collector.service';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
 
 /**
  * Failures here must surface as non-2xx. Returning `{ ok: false }` with HTTP 200
@@ -16,6 +18,7 @@ export class CollectorController {
   constructor(private readonly collectorService: CollectorService) {}
 
   @Post('run')
+  @UseGuards(AdminTokenGuard)
   async runPipeline(): Promise<{ ok: true; accepted: true; message: string }> {
     let result: { accepted: boolean; reason?: string };
     try {
@@ -66,6 +69,7 @@ export class CollectorController {
   }
 
   @Post('select-front-page')
+  @UseGuards(AdminTokenGuard)
   async selectFrontPage(): Promise<{ ok: true; message: string }> {
     try {
       await this.collectorService.selectForFrontPage();
@@ -82,6 +86,7 @@ export class CollectorController {
   }
 
   @Post('rescore-pending')
+  @UseGuards(AdminTokenGuard)
   async rescorePending(): Promise<{
     ok: true;
     message: string;

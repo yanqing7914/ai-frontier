@@ -8,7 +8,9 @@ import {
   Param,
   Query,
   Body,
+  UseGuards,
 } from '@nestjs/common';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
 import { FeedSourceService } from './feed-source.service';
 import type {
   CreateFeedSourceRequest,
@@ -44,11 +46,13 @@ export class FeedSourceController {
   }
 
   @Post()
+  @UseGuards(AdminTokenGuard)
   async create(@Body() dto: CreateFeedSourceRequest) {
     return this.feedSourceService.create(dto);
   }
 
   @Patch(':id')
+  @UseGuards(AdminTokenGuard)
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateFeedSourceRequest,
@@ -57,11 +61,13 @@ export class FeedSourceController {
   }
 
   @Delete(':id')
+  @UseGuards(AdminTokenGuard)
   async delete(@Param('id') id: string) {
     return this.feedSourceService.delete(id);
   }
 
   @Patch(':id/toggle')
+  @UseGuards(AdminTokenGuard)
   async toggle(
     @Param('id') id: string,
     @Body() dto: ToggleFeedSourceRequest,
