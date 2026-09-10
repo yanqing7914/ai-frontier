@@ -176,7 +176,10 @@ function ScorePanel({ articleId }: ScorePanelProps) {
       })
       .catch((err: unknown) => {
         logger.error(`Failed to load scores: ${String(err)}`);
-        if (!cancelled) toast.error('加载打分明细失败');
+        if (!cancelled) {
+          setScores([]);
+          toast.error('加载打分明细失败');
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -318,6 +321,7 @@ const WorkbenchScoreTab = () => {
       )
       .catch((err: unknown) => {
         logger.error(`Failed to load articles: ${String(err)}`);
+        setArticles([]);
         toast.error('加载文章列表失败');
       })
       .finally(() => setLoading(false));

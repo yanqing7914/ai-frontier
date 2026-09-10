@@ -30,6 +30,9 @@ const WeiboHotCard = ({ forceRefresh, onDataLoaded }: WeiboHotCardProps) => {
     try {
       const result = await getWeiboHotSearch(force);
       setData(result);
+      if (!result.ok || result.source === 'none') {
+        setError(result.reason === 'no_snapshot' ? '数据源不可用，当前没有可用快照' : '数据源暂时不可用，请稍后重试');
+      }
       onDataLoaded?.(result);
     } catch (err: unknown) {
       logger.error(`Failed to fetch Weibo hot search: ${String(err)}`);
@@ -96,7 +99,7 @@ const WeiboHotCard = ({ forceRefresh, onDataLoaded }: WeiboHotCardProps) => {
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
-        ) : data && data.items.length > 0 ? (
+        ) : data && data.ok && data.source !== 'none' && data.items.length > 0 ? (
           <div className="flex flex-col">
             {data.items.map((item: WeiboHotItem) => (
               <UniversalLink
@@ -140,6 +143,10 @@ const WeiboHotCard = ({ forceRefresh, onDataLoaded }: WeiboHotCardProps) => {
                 </div>
               </UniversalLink>
             ))}
+          </div>
+        ) : data && (!data.ok || data.source === 'none') ? (
+          <div className="flex flex-col items-center justify-center py-12">
+            <p className="text-sm text-muted-foreground">{error ?? '数据源不可用，请稍后重试'}</p>
           </div>
         ) : (
           <div className="flex items-center justify-center py-12">

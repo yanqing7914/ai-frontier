@@ -129,6 +129,7 @@ const Workbench = () => {
       .then((data: WorkbenchOverview) => setOverview(data))
       .catch((err: unknown) => {
         logger.error(`Failed to load overview: ${String(err)}`);
+        setOverview(null);
         toast.error('加载概览数据失败');
       })
       .finally(() => setOverviewLoading(false));

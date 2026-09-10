@@ -49,6 +49,7 @@ const WorkbenchTraceTab = () => {
       .then((data: { items: ArticleTrace[] }) => setItems(data.items))
       .catch((err: unknown) => {
         logger.error(`Failed to load traces: ${String(err)}`);
+        setItems([]);
         toast.error('加载溯源数据失败');
       })
       .finally(() => setLoading(false));
