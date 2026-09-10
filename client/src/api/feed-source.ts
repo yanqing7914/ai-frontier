@@ -1,4 +1,5 @@
 import { http } from '@/lib/http';
+import { parsePaginatedResponse } from '@/lib/api-contract';
 import type {
   FeedSourceListItem,
   FeedSourceHealth,
@@ -14,7 +15,7 @@ export async function getFeedSources(params: {
   enabled?: string;
 }) {
   const res = await http.get('/api/feed-sources', { params });
-  return res.data as PaginatedResponse<FeedSourceListItem>;
+  return parsePaginatedResponse<FeedSourceListItem>(res.data, 'Feed sources');
 }
 
 export async function getFeedSource(id: string) {

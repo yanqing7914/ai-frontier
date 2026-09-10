@@ -44,6 +44,7 @@ const WorkbenchReviewTab = () => {
       .then((data: { items: ReviewItem[] }) => setItems(data.items))
       .catch((err: unknown) => {
         logger.error(`Failed to load reviews: ${String(err)}`);
+        setItems([]);
         toast.error('加载审核队列失败');
       })
       .finally(() => setLoading(false));

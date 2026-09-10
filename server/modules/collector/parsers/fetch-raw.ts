@@ -1,6 +1,7 @@
 export const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
 export const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const USER_AGENT = 'AI-News-Dashboard/1.0';
+import { validateSafeUrl } from '../trace-engine';
 
 export interface RawFetchResult {
   content: string;
@@ -108,6 +109,11 @@ export async function fetchRawContent(
     DEFAULT_MAX_RESPONSE_BYTES,
     'maxBytes',
   );
+  const safety = await validateSafeUrl(url);
+  if (!safety.safe || !safety.url) {
+    throw new Error(`Refusing unsafe remote URL: ${safety.reason}`);
+  }
+  url = safety.url;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 

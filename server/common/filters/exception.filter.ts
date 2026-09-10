@@ -39,8 +39,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       errorResponse = {
         error: {
           code: HTTP_STATUS_TO_RESPONSE_CODE_MAP[httpStatus],
-          message: typeof exceptionResponse === 'string' ? exceptionResponse : exception.message,
-          details: typeof exceptionResponse === 'object' ? JSON.stringify(exceptionResponse) : undefined,
+          message: sanitizeHttpMessage(exceptionResponse, httpStatus),
+          details: isProduction() ? undefined : typeof exceptionResponse === 'object' ? JSON.stringify(exceptionResponse) : undefined,
           timestamp: Date.now(),
         },
       };
@@ -66,8 +66,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         error: {
           code: ResponseCode.INTERNAL_ERROR,
           message: '服务器内部错误',
-          stack: (exception as Error).stack,
-          cause: (exception as Error).cause as string,
+          ...(isProduction() ? {} : {
+            stack: (exception as Error).stack,
+            cause: String((exception as Error).cause ?? ''),
+          }),
           timestamp: Date.now(),
         },
       };
@@ -75,4 +77,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     response.status(httpStatus).json(errorResponse);
   }
+}
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === 'production';
+}
+
+function sanitizeHttpMessage(exceptionResponse: string | object, status: HttpStatus): string {
+  if (isProduction() && status >= 500) return '服务器内部错误';
+  if (typeof exceptionResponse === 'string') return exceptionResponse;
+  const message = (exceptionResponse as { message?: unknown }).message;
+  if (Array.isArray(message)) return message.join('; ');
+  return typeof message === 'string' ? message : '请求失败';
 }

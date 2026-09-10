@@ -12,6 +12,7 @@ import { DigestModule } from './modules/digest/digest.module';
 import { ReviewModule } from './modules/review/review.module';
 import { HotlistModule } from './modules/hotlist/hotlist.module';
 import { HealthModule } from './modules/health/health.module';
+import { ApiUnavailableModule } from './modules/api-unavailable/api-unavailable.module';
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL);
 const applicationModules = hasDatabaseUrl
   ? [
@@ -30,6 +31,7 @@ const applicationModules = hasDatabaseUrl
     ...applicationModules,
     // ====== @route-section: business-modules START ======
     HealthModule,
+    ...(!hasDatabaseUrl ? [ApiUnavailableModule] : []),
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last

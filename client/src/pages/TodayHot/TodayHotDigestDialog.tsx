@@ -33,6 +33,7 @@ export function DigestDialog({
   const [digest, setDigest] = useState<DailyDigest | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [notFound, setNotFound] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const directionMap = new Map(
     directions.map((d: DirectionConfig) => [d.key, d]),
@@ -49,6 +50,7 @@ export function DigestDialog({
         }).format(new Date());
         setLoading(true);
         setNotFound(false);
+        setError(null);
         getDailyDigest(today)
           .then((data: DailyDigest) => {
             setDigest(data);
@@ -58,6 +60,7 @@ export function DigestDialog({
               `Failed to fetch digest: ${String(err)}`,
             );
             setNotFound(true);
+            setError('今日简报暂时无法加载，请稍后重试');
             toast.error('获取今日简报失败');
           })
           .finally(() => {
@@ -67,6 +70,7 @@ export function DigestDialog({
       if (!nextOpen) {
         setDigest(null);
         setNotFound(false);
+        setError(null);
       }
       onOpenChange(nextOpen);
     },
@@ -91,7 +95,7 @@ export function DigestDialog({
 
         {notFound && !loading && (
           <p className="text-sm text-muted-foreground py-8 text-center">
-            今日简报尚未生成
+            {error ?? '今日简报暂时无法加载，请稍后重试'}
           </p>
         )}
 

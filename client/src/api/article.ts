@@ -1,4 +1,5 @@
 import { http } from '@/lib/http';
+import { parseDailyDigest, parseItemsResponse, parsePaginatedResponse, parseWorkbenchOverview } from '@/lib/api-contract';
 import type {
   HotArticleItem,
   PaginatedResponse,
@@ -17,19 +18,19 @@ export async function getHotArticles(params: {
   directions?: string;
 }): Promise<PaginatedResponse<HotArticleItem>> {
   const res = await http.get('/api/hot-articles', { params });
-  return res.data as PaginatedResponse<HotArticleItem>;
+  return parsePaginatedResponse<HotArticleItem>(res.data, 'Hot articles');
 }
 
 export async function getDailyDigest(
   date: string,
 ): Promise<DailyDigest> {
   const res = await http.get(`/api/daily-digests/${date}`);
-  return res.data as DailyDigest;
+  return parseDailyDigest(res.data);
 }
 
 export async function getWorkbenchOverview(): Promise<WorkbenchOverview> {
   const res = await http.get('/api/workbench/overview');
-  return res.data as WorkbenchOverview;
+  return parseWorkbenchOverview(res.data);
 }
 
 export async function getWorkbenchArticles(params: {
@@ -42,14 +43,14 @@ export async function getWorkbenchArticles(params: {
   const res = await http.get('/api/workbench/articles', {
     params,
   });
-  return res.data as PaginatedResponse<WorkbenchArticleItem>;
+  return parsePaginatedResponse<WorkbenchArticleItem>(res.data, 'Workbench articles');
 }
 
 export async function getArticleScores(
   id: string,
 ): Promise<{ items: DirectionScoreItem[] }> {
   const res = await http.get(`/api/articles/${id}/scores`);
-  return res.data as { items: DirectionScoreItem[] };
+  return parseItemsResponse<DirectionScoreItem>(res.data, 'Article scores');
 }
 
 export async function getQualityGates(params: {
@@ -60,7 +61,7 @@ export async function getQualityGates(params: {
   const res = await http.get('/api/workbench/quality-gates', {
     params,
   });
-  return res.data as PaginatedResponse<QualityGateItem>;
+  return parsePaginatedResponse<QualityGateItem>(res.data, 'Quality gates');
 }
 
 export async function getTraceList(params: {
@@ -69,7 +70,7 @@ export async function getTraceList(params: {
   traceStatus?: string;
 }): Promise<PaginatedResponse<ArticleTrace>> {
   const res = await http.get('/api/workbench/trace', { params });
-  return res.data as PaginatedResponse<ArticleTrace>;
+  return parsePaginatedResponse<ArticleTrace>(res.data, 'Article trace');
 }
 
 export async function getReviews(params: {
@@ -80,7 +81,7 @@ export async function getReviews(params: {
   const res = await http.get('/api/workbench/reviews', {
     params,
   });
-  return res.data as PaginatedResponse<ReviewItem>;
+  return parsePaginatedResponse<ReviewItem>(res.data, 'Reviews');
 }
 
 export async function processReview(

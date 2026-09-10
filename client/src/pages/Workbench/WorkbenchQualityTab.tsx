@@ -62,6 +62,7 @@ const WorkbenchQualityTab = () => {
       .then((data: { items: QualityGateItem[] }) => setItems(data.items))
       .catch((err: unknown) => {
         logger.error(`Failed to load quality gates: ${String(err)}`);
+        setItems([]);
         toast.error('加载质量门禁失败');
       })
       .finally(() => setLoading(false));

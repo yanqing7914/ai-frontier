@@ -22,7 +22,7 @@ const MAX_RESTART_COUNT = process.env.MAX_RESTART_COUNT != null && process.env.M
 const RESTART_DELAY = parseInt(process.env.RESTART_DELAY, 10) || 2;
 const MAX_DELAY = 8;
 const SERVER_PORT = process.env.SERVER_PORT || '3000';
-const CLIENT_DEV_PORT = process.env.CLIENT_DEV_PORT || '8080';
+const CLIENT_DEV_PORT = process.env.CLIENT_DEV_PORT || '5173';
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 

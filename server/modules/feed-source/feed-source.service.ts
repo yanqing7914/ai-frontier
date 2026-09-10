@@ -541,6 +541,8 @@ export function canonicalizeFeedUrl(value: unknown): string {
     !host
     || BLOCKED_HOSTS.has(host)
     || BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
+    || /^0x[0-9a-f]+$/i.test(host)
+    || /^\d+$/.test(host)
     || isPrivateNetworkHost(host)
   ) {
     throw new BadRequestException('url host is not allowed');
