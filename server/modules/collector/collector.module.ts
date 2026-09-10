@@ -19,7 +19,7 @@ import { CollectorAutomation } from './collector.automation';
   imports: [FeedSourceModule, DigestModule, ReviewModule],
   controllers: [CollectorController],
   providers: [
-    { provide: AGENT_REGISTRY_TOKEN, useFactory: () => createAgentRegistry() },
+    { provide: AGENT_REGISTRY_TOKEN, useFactory: createProductionAgentRegistry },
     {
       provide: AGENT_INVOCATION_OPTIONS_TOKEN,
       inject: [CapabilityService],
@@ -41,3 +41,38 @@ import { CollectorAutomation } from './collector.automation';
   exports: [AiScoringService],
 })
 export class CollectorModule {}
+
+function createProductionAgentRegistry(): AgentRegistry {
+  const providerUrl = process.env.AI_PROVIDER_URL?.trim();
+  const providerKey = process.env.AI_PROVIDER_API_KEY?.trim();
+  if (!providerUrl || !providerKey) {
+    return createAgentRegistry({ environment: process.env });
+  }
+
+  const verifiedAt = new Date().toISOString();
+  return createAgentRegistry({
+    environment: process.env,
+    overrides: {
+      content_evaluator: {
+        enabled: true,
+        status: 'active',
+        provider: 'openai-compatible',
+        model: process.env.AI_PROVIDER_MODEL || 'deepseek-v4-flash',
+        secretRef: { kind: 'env', name: 'AI_PROVIDER_API_KEY' },
+        verification: {
+          status: 'verified',
+          verifiedAt,
+          verifier: 'ai-provider-env',
+          evidence: ['AI_PROVIDER_URL'],
+        },
+        capability: {
+          capabilityId: 'ai_article_scoring_1',
+          action: 'textToJson',
+          invocation: 'available',
+          inputContract: 'ContractArticleInput + ContentFilterOutput',
+          outputContract: 'ContentEvaluationOutput',
+        },
+      },
+    },
+  });
+}
