@@ -1,6 +1,7 @@
 import { resolveApiBaseUrl } from '../../client/src/lib/api-base-url';
 import { validateApiResponse } from '../../client/src/lib/validate-api-response';
 import { parseHotlistResponse, parsePaginatedResponse } from '../../client/src/lib/api-contract';
+import { getDevelopmentAdminHeaders } from '../../client/src/lib/admin-auth';
 
 describe('API base URL resolution', () => {
   it('uses same-origin proxy by default', () => {
@@ -38,5 +39,19 @@ describe('API contract validation', () => {
 
   it('rejects malformed hotlist envelopes', () => {
     expect(() => parseHotlistResponse({ ok: true, kind: 'github', source: 'live' })).toThrow('items');
+  });
+});
+
+describe('development admin authentication', () => {
+  it('sends a token only for an explicitly enabled local development build', () => {
+    expect(getDevelopmentAdminHeaders(true, true, ' dev-token ')).toEqual({
+      'x-admin-token': 'dev-token',
+    });
+  });
+
+  it('never sends the token in production or without the local opt-in', () => {
+    expect(getDevelopmentAdminHeaders(false, true, 'prod-token')).toEqual({});
+    expect(getDevelopmentAdminHeaders(true, false, 'token')).toEqual({});
+    expect(getDevelopmentAdminHeaders(true, true, '')).toEqual({});
   });
 });
