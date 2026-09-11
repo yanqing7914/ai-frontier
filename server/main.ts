@@ -1,11 +1,15 @@
-import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { join } from 'path';
 import { __express as hbsExpressEngine } from 'hbs';
+import { loadRuntimeEnvironment } from './infrastructure/runtime-env';
 
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from './app.module';
+
+// AppModule decides which modules to register during import, so environment
+// files must be loaded before requiring it.
+loadRuntimeEnvironment();
+const { AppModule } = require('./app.module') as typeof import('./app.module');
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
