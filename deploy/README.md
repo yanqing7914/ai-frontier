@@ -1,5 +1,9 @@
 # Deployment
 
+The repository-wide development and release rules are documented in
+`docs/development-workflow.md`. This file only documents the artifact layout
+and deployment workflow details.
+
 The workflows build `dist/` and publish it as a short-lived GitHub Actions artifact. The
 `Deploy` workflow is a manual, environment-scoped SSH deployment; it changes only the
 selected target's release symlink and systemd service. The older `Deploy (manual template)`

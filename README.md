@@ -48,3 +48,6 @@ assets, never set this in production or commit the token.
 - `deploy/` - packaging and healthcheck notes
 
 See `deploy/README.md` for the current artifact-based deployment process.
+
+See `docs/development-workflow.md` for the required branch, review, testing,
+staging, production, rollback, and secret-management workflow.

@@ -145,6 +145,9 @@ docs/ARCHITECTURE.md    12-stage pipeline 和八角色架构说明
 
 ## 5. 本地开发
 
+完整的分支、PR、CI、staging、production 和回滚规范见
+`docs/development-workflow.md`。后续开发必须以该文档为准。
+
 要求：Node.js 22+、npm 10+。
 
 ```bash
