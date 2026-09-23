@@ -29,10 +29,10 @@ AI Frontier 是一个内部 AI 行业资讯系统，负责：
 ### 本地代码
 
 - 当前分支：`codex/fix-litellm-provider`
-- HEAD：`ac0d0a2 fix: load runtime environment before module registration`
-- 当前分支包含 LiteLLM/OpenAI-compatible provider、provider timeout/cancellation、健康检查、Collector 聚类阶段拆分和生产构建修复。
-- 这些最新改动仍有大量未提交文件；当前工作树不是干净状态。
-- 最新改动尚未确认合并到 `dev` / `main`，也没有确认部署到任何远程服务器。
+- HEAD：`590b42a fix: pass systemd scope to deployment step`
+- 当前分支包含 LiteLLM/OpenAI-compatible provider、provider timeout/cancellation、健康检查、Collector 聚类阶段拆分、生产构建修复和手动环境部署 workflow。
+- 当前工作树干净；上述改动已拆分为本地 Git 提交，但尚未推送到远程 `dev` / `main`。
+- 尚未运行真实 GitHub Actions 部署，也没有确认部署到任何远程服务器。
 
 ### 验证结果
 
