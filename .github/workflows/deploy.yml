@@ -1,0 +1,170 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy to
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      ref:
+        description: Commit, branch, or tag to deploy
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build deployable artifact
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      commit_sha: ${{ steps.revision.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run type:check
+      - run: npm test -- --runInBand
+      - run: npm run build:prod
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+      - name: Resolve checked-out revision
+        id: revision
+        run: echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Write build metadata
+        run: |
+          printf '{"sha":"%s","ref":"%s","environment":"%s","built_at":"%s"}\n' \
+            "${{ steps.revision.outputs.commit_sha }}" "${{ inputs.ref }}" "${{ inputs.environment }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > dist/build-metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-dist-${{ steps.revision.outputs.commit_sha }}
+          path: |
+            dist
+            package.json
+            package-lock.json
+            scripts/run.sh
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    needs: package
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-dist-${{ needs.package.outputs.commit_sha }}
+          path: artifact
+      - name: Validate deployment configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
+          DEPLOY_SYSTEMD_SCOPE: ${{ secrets.DEPLOY_SYSTEMD_SCOPE || 'user' }}
+        run: |
+          test -n "$DEPLOY_HOST" || { echo 'Missing DEPLOY_HOST'; exit 1; }
+          test -n "$DEPLOY_USER" || { echo 'Missing DEPLOY_USER'; exit 1; }
+          test -n "$DEPLOY_PATH" || { echo 'Missing DEPLOY_PATH'; exit 1; }
+          test -n "$DEPLOY_SSH_KEY" || { echo 'Missing DEPLOY_SSH_KEY'; exit 1; }
+          if [ -n "$DEPLOY_SERVICE" ]; then
+            case "$DEPLOY_SERVICE" in
+              ai-frontier-staging.service|ai-frontier-production.service) ;;
+              *) echo 'DEPLOY_SERVICE must be ai-frontier-staging.service or ai-frontier-production.service'; exit 1 ;;
+            esac
+          fi
+      - name: Deploy release and run health check
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
+          DEPLOY_SYSTEMD_SCOPE: ${{ secrets.DEPLOY_SYSTEMD_SCOPE || 'user' }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          commit_sha="${{ needs.package.outputs.commit_sha }}"
+          tar -czf "$RUNNER_TEMP/release.tgz" -C artifact .
+          scp -i "$key" -P "$DEPLOY_PORT" -o StrictHostKeyChecking=accept-new \
+            "$RUNNER_TEMP/release.tgz" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/ai-frontier-release-$commit_sha.tgz"
+          ssh -i "$key" -p "$DEPLOY_PORT" -o StrictHostKeyChecking=accept-new \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' RELEASE_SHA='$commit_sha' DEPLOY_SERVICE='$DEPLOY_SERVICE' DEPLOY_SYSTEMD_SCOPE='$DEPLOY_SYSTEMD_SCOPE' DEPLOY_ENV='${{ inputs.environment }}' HEALTHCHECK_URL='$HEALTHCHECK_URL' bash -s" <<'REMOTE'
+          set -euo pipefail
+          release="$DEPLOY_PATH/releases/$RELEASE_SHA"
+          service="${DEPLOY_SERVICE:-ai-frontier-${DEPLOY_ENV}.service}"
+          case "$DEPLOY_SYSTEMD_SCOPE" in
+            user) systemctl_cmd=(systemctl --user) ;;
+            system) systemctl_cmd=(systemctl) ;;
+            *) echo "DEPLOY_SYSTEMD_SCOPE must be user or system" >&2; exit 1 ;;
+          esac
+          case "$service" in
+            ai-frontier-staging.service|ai-frontier-production.service) ;;
+            *) echo "Unsupported service: $service" >&2; exit 1 ;;
+          esac
+          mkdir -p "$release"
+          tar -xzf "/tmp/ai-frontier-release-$RELEASE_SHA.tgz" -C "$release"
+          # upload-artifact preserves the dist directory; flatten it so the
+          # release root matches scripts/run.sh and the systemd WorkingDirectory.
+          if [ -d "$release/dist" ]; then
+            cp -a "$release/dist/." "$release/"
+            rm -rf "$release/dist"
+          fi
+          cd "$release"
+          npm ci --omit=dev --ignore-scripts
+          # Keep secrets outside releases while making runtime env discovery
+          # independent of the systemd WorkingDirectory implementation.
+          ln -sfn "$DEPLOY_PATH/.env" "$release/.env"
+          test -x "$release/scripts/run.sh"
+          test -f "$DEPLOY_PATH/.env"
+          if ! "${systemctl_cmd[@]}" is-enabled --quiet "$service" 2>/dev/null; then
+            echo "$service is not installed/enabled; refusing to start an unmanaged process." >&2
+            exit 1
+          fi
+          previous=""
+          if [ -L "$DEPLOY_PATH/current" ]; then previous="$(readlink "$DEPLOY_PATH/current")"; fi
+          rollback() {
+            if [ -n "$previous" ]; then
+              ln -sfn "$previous" "$DEPLOY_PATH/current"
+              "${systemctl_cmd[@]}" restart "$service" || true
+            else
+              rm -f "$DEPLOY_PATH/current"
+            fi
+          }
+          trap rollback ERR
+          ln -sfn "$release" "$DEPLOY_PATH/current"
+          if ! "${systemctl_cmd[@]}" restart "$service"; then
+            exit 1
+          fi
+          "${systemctl_cmd[@]}" is-active --quiet "$service"
+          if [ -n "${HEALTHCHECK_URL:-}" ]; then
+            health_url="${HEALTHCHECK_URL%/}"
+            case "$health_url" in */health) ;; *) health_url="$health_url/health" ;; esac
+            command -v curl >/dev/null || { echo 'curl is required for HEALTHCHECK_URL' >&2; exit 1; }
+            curl --fail --retry 10 --retry-delay 3 --max-time 15 "$health_url"
+          fi
+          REMOTE

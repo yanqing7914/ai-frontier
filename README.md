@@ -25,6 +25,15 @@ The server listens on `SERVER_HOST` and `SERVER_PORT` (default `0.0.0.0:3000`).
 Keep database URLs, API keys, and platform credentials in the local or hosting
 secret store; do not commit `.env` files.
 
+After `npm run build:prod`, start the packaged server with `npm start` from the
+project root. The same launcher is copied to `dist/scripts/run.sh` for artifact
+deployments.
+
+The provider bridge keeps the legacy capability request format by default. For
+LiteLLM or another OpenAI-compatible endpoint, set
+`AI_PROVIDER_PROTOCOL=openai` (and provide `AI_PROVIDER_URL`,
+`AI_PROVIDER_API_KEY`, and `AI_PROVIDER_MODEL`).
+
 For a protected local development API, set `VITE_LOCAL_DEV=true` and provide
 `VITE_ADMIN_API_TOKEN` in `.env.local`. The token is sent as `x-admin-token`
 only by Vite development builds. Because Vite embeds `VITE_*` values in browser
@@ -39,3 +48,6 @@ assets, never set this in production or commit the token.
 - `deploy/` - packaging and healthcheck notes
 
 See `deploy/README.md` for the current artifact-based deployment process.
+
+See `docs/development-workflow.md` for the required branch, review, testing,
+staging, production, rollback, and secret-management workflow.

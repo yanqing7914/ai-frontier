@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -32,3 +33,5 @@ jobs:
         run: npm run build:prod
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+      - name: Smoke test packaged production server
+        run: npm run smoke:prod

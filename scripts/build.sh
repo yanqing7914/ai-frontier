@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
+
+cd "$ROOT_DIR"
 
 # 记录总开始时间
 TOTAL_START=$(node -e "console.log(Date.now())")
@@ -47,39 +50,25 @@ if [[ "${only_frontend_change:-false}" == "true" ]]; then
 
   echo "   ✅ Client 构建完成"
 else
-  echo "并行构建 server 和 client"
+  echo "构建 server 和 client"
 
-  # 并行构建
-  echo "   ├─ 启动 server 构建..."
-  NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build:server > /tmp/build-server.log 2>&1 &
-  SERVER_PID=$!
-
+  # Vite owns the dist directory and clears it before writing. Build it first,
+  # then emit the Nest server beside the client so the two builds cannot race.
   echo "   ├─ 启动 client 构建..."
-  NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build:client > /tmp/build-client.log 2>&1 &
-  CLIENT_PID=$!
-
-  # 等待两个构建完成
-  SERVER_EXIT=0
-  CLIENT_EXIT=0
-
-  wait $SERVER_PID || SERVER_EXIT=$?
-  wait $CLIENT_PID || CLIENT_EXIT=$?
-
-  # 检查构建结果
-  if [ $SERVER_EXIT -ne 0 ]; then
-    echo "   ❌ Server 构建失败"
-    cat /tmp/build-server.log
-    exit 1
-  fi
-
-  if [ $CLIENT_EXIT -ne 0 ]; then
+  if ! NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build:client > /tmp/build-client.log 2>&1; then
     echo "   ❌ Client 构建失败"
     cat /tmp/build-client.log
     exit 1
   fi
-
-  echo "   ✅ Server 构建完成"
   echo "   ✅ Client 构建完成"
+
+  echo "   ├─ 启动 server 构建..."
+  if ! NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build:server > /tmp/build-server.log 2>&1; then
+    echo "   ❌ Server 构建失败"
+    cat /tmp/build-server.log
+    exit 1
+  fi
+  echo "   ✅ Server 构建完成"
 fi
 
 print_time $STEP_START
@@ -88,19 +77,17 @@ echo ""
 echo "[3/4] 准备产物"
 STEP_START=$(node -e "console.log(Date.now())")
 
-# 移动 client 下的 HTML 文件到 dist/dist/client，保证 views 路径在 dev/prod 下一致
-# 使用 mv 而非 cp：HTML 不能上传到公网 CDN，移走后 dist/client 中不再包含 HTML
-if [ -d "$DIST_DIR/client" ]; then
-  mkdir -p "$DIST_DIR/dist/client"
-  find "$DIST_DIR/client" -maxdepth 1 -name "*.html" -exec mv {} "$DIST_DIR/dist/client/" \;
-fi
-
 # server 相关产物准备（only_frontend_change=true 时跳过）
 if [[ "${only_frontend_change:-false}" == "true" ]]; then
   echo "   [skip] 跳过 run.sh/.env 复制 (only_frontend_change=true)"
 else
-  # 拷贝 run.sh 到 dist/（prod 从 dist/ 启动，确保 cwd 一致性）
-  cp "$ROOT_DIR/scripts/run.sh" "$DIST_DIR/"
+  # Include the launcher and manifests so an extracted dist directory is
+  # runnable without the source checkout.
+  mkdir -p "$DIST_DIR/scripts"
+  cp "$ROOT_DIR/scripts/run.sh" "$DIST_DIR/scripts/run.sh"
+  cp "$ROOT_DIR/package.json" "$DIST_DIR/package.json"
+  cp "$ROOT_DIR/package-lock.json" "$DIST_DIR/package-lock.json"
+  chmod +x "$DIST_DIR/scripts/run.sh"
 
   # Runtime configuration must come from the target environment, never from a
   # developer workstation copied into the distributable artifact.
@@ -108,7 +95,6 @@ else
 fi
 
 # 清理无用文件
-rm -rf "$DIST_DIR/scripts"
 rm -rf "$DIST_DIR/tsconfig.node.tsbuildinfo"
 
 print_time $STEP_START

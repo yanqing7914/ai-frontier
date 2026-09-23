@@ -1,5 +1,17 @@
 # UI 设计指南
 
+## 开发流程强制入口
+
+本仓库的开发、测试、PR、staging、production、回滚和密钥管理规则以
+[`docs/development-workflow.md`](docs/development-workflow.md) 为准。任何
+Agent 或开发者在修改代码前必须先阅读该文档，并按 Discovery -> Planning ->
+Implementation -> Validation -> Release 的顺序推进。
+
+- 不得直接修改 `main` 或 `dev`；从 `dev` 创建主题分支并通过 Pull Request 合并。
+- 提交 PR 前必须执行 lint、类型检查、测试、生产构建、冒烟测试和 `git diff --check`，除非在 PR 中说明不适用原因。
+- 涉及部署时必须区分 staging/production，禁止把真实密钥、生产数据或未验证的服务器改动带入仓库。
+- 完成任务时必须报告验证证据、提交 SHA、部署环境和未完成的阻塞项。
+
 > **设计类型**: App 设计（应用架构设计）
 > **确认检查**: 本指南适用于可交互的应用/网站/工具。
 

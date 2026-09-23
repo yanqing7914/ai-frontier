@@ -6,6 +6,10 @@ const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:13
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    outDir: path.resolve(__dirname, 'dist/client'),
+    emptyOutDir: true,
+  },
   // Local browser runs use the root path; hosted deployments can provide a base path.
   base: process.env.LOCAL_DEV === 'true' ? '/' : undefined,
   server: {
