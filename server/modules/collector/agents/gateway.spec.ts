@@ -301,6 +301,52 @@ describe('AgentGateway', () => {
     );
   });
 
+  it('aborts a cancellation-aware capability when its invocation times out', async () => {
+    const signalSeen: AbortSignal[] = [];
+    const callWithSignal = jest.fn(
+      async (
+        _action: string,
+        _input: unknown,
+        _context: unknown,
+        signal: AbortSignal,
+      ) => {
+        signalSeen.push(signal);
+        return new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            reject(new Error('cancelled'));
+          });
+        });
+      },
+    );
+    const registry = createAgentRegistry({
+      environment: {},
+      overrides: {
+        content_evaluator: {
+          ...availableOverride('content_evaluator'),
+          timeoutMs: 5,
+        },
+      },
+    });
+
+    const result = await new AgentGateway(registry, {
+      resolver: () => true,
+      adapters: {
+        capability: {
+          load: jest.fn(() => ({ callWithSignal })),
+        },
+      },
+    }).invoke('content_evaluator', { input: 'text' });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'failed',
+      code: 'invocation_failed',
+    });
+    expect(callWithSignal).toHaveBeenCalledTimes(1);
+    expect(signalSeen).toHaveLength(1);
+    expect(signalSeen[0].aborted).toBe(true);
+  });
+
   it('accepts an opaque successful secret resolution without exposing a value', async () => {
     const call = jest.fn().mockResolvedValue({ answer: 'ok' });
     const load = jest.fn().mockReturnValue({ call });

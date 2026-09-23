@@ -422,9 +422,17 @@ function timeoutMs(agent: AgentRuntimeConfig): number {
 async function withTimeout<T>(
   value: Promise<T>,
   milliseconds: number,
+  onTimeout?: () => void,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), milliseconds);
+    const timer = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        // Timeout cancellation is best effort; the stable timeout result wins.
+      }
+      reject(new Error('timeout'));
+    }, milliseconds);
     value.then(
       (result) => {
         clearTimeout(timer);
@@ -518,17 +526,38 @@ export class AgentGateway {
         // getAgentInvocationGates only inspected the adapter shape. This is
         // the first point at which the host capability is loaded and called.
         const executor = capability!.load(capabilityId);
-        if (!executor || typeof executor.call !== 'function') {
+        if (
+          !executor ||
+          (typeof executor.call !== 'function' &&
+            typeof executor.callWithSignal !== 'function')
+        ) {
           return failure(role, 'adapter_required', 'failed', 'adapter');
         }
         // The scoring capability historically accepts a two-argument call;
         // preserve that adapter contract while retaining the explicit context
         // slot for other capability integrations.
+        // Keep the historical call seam unchanged; cancellation is carried by
+        // the explicit callWithSignal seam when an adapter supports it.
+        const controller =
+          typeof executor.callWithSignal === 'function'
+            ? new AbortController()
+            : undefined;
         const result =
-          this.options.omitUndefinedContext && contextValue === undefined
-            ? executor.call(action, input)
-            : executor.call(action, input, contextValue);
-        output = await withTimeout(Promise.resolve(result), timeoutMs(agent));
+          typeof executor.callWithSignal === 'function'
+            ? executor.callWithSignal(
+                action,
+                input,
+                contextValue,
+                controller!.signal,
+              )
+            : this.options.omitUndefinedContext && contextValue === undefined
+              ? executor.call!(action, input)
+              : executor.call!(action, input, contextValue);
+        output = await withTimeout(
+          Promise.resolve(result),
+          timeoutMs(agent),
+          () => controller?.abort(),
+        );
       } else if (agent.provider !== 'contract-local') {
         const external = adapters.external!;
         output = await withTimeout(

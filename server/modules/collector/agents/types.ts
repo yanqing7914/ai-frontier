@@ -89,11 +89,28 @@ export interface CapabilityBinding {
   invocation: 'not_configured' | 'adapter_only' | 'available';
 }
 
-/** A minimal capability shape. It is an adapter seam, not an
- * implementation and therefore cannot accidentally perform a platform call. */
-export interface CapabilityExecutor {
-  call(action: string, input: unknown, context?: unknown): Promise<unknown>;
-}
+type CapabilityCall = (
+  action: string,
+  input: unknown,
+  context?: unknown,
+  options?: { signal?: AbortSignal },
+) => Promise<unknown>;
+
+type SignalCapabilityCall = (
+  action: string,
+  input: unknown,
+  context: unknown,
+  signal: AbortSignal,
+) => Promise<unknown>;
+
+/**
+ * A minimal capability shape. Hosts may implement the legacy call seam, the
+ * cancellation-aware seam, or both; the gateway validates that at least one
+ * exists before invocation.
+ */
+export type CapabilityExecutor =
+  | { call: CapabilityCall; callWithSignal?: SignalCapabilityCall }
+  | { call?: CapabilityCall; callWithSignal: SignalCapabilityCall };
 
 export interface CapabilityServiceAdapter {
   load(capabilityId: string): CapabilityExecutor;

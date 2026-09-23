@@ -1,7 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
+import {
+  DIRECTIONS,
+  getDirectionEvidenceRequirement,
+} from '@shared/directions';
+import {
+  AI_SCORING_CAPABILITY_ID,
+  normalizeAiProviderProtocol,
+  resolveAiProviderEndpoint,
+} from './ai-provider-status';
 
 export interface CapabilityExecutor {
-  call(action: string, input: unknown, context?: unknown): Promise<unknown>;
+  call(
+    action: string,
+    input: unknown,
+    context?: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  /** Optional cancellation-aware seam for invocation gateways. */
+  callWithSignal?: (
+    action: string,
+    input: unknown,
+    context: unknown,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
 }
 
 interface ChatCompletionResponse {
@@ -10,6 +31,23 @@ interface ChatCompletionResponse {
       content?: string | Array<{ type?: string; text?: string }>;
     };
   }>;
+}
+
+function scoringEvidenceContract(): string {
+  return DIRECTIONS.map((direction) => {
+    const dimensions = direction.dimensions.map((dimension) => {
+      const requirement = getDirectionEvidenceRequirement(
+        direction.id,
+        dimension,
+      );
+      if (!requirement) return `${dimension} [no additional fields]`;
+      const alternatives = requirement.oneOf?.length
+        ? `; one of: ${requirement.oneOf.join(', ')}`
+        : '';
+      return `${dimension} [required: ${requirement.required.join(', ')}${alternatives}]`;
+    });
+    return `${direction.id}: ${dimensions.join('; ')}`;
+  }).join('\n');
 }
 
 const SCORING_JSON_INSTRUCTIONS = `You score AI-news articles. Reply with JSON only, no markdown.
@@ -44,8 +82,24 @@ Schema:
 Rules:
 - Score 5 only for a direct, present-tense fact in the article. 2.5 for a weak but grounded hint. 0 if absent.
 - Every non-zero dimension MUST have one evidence item whose quote is copied verbatim from article_text.
+- For a score of 5, fill every required field and at least one listed alternative in the dimension contract below.
+- Every field used to justify a score MUST be literally recoverable from the same quote; do not paraphrase entities, numbers, status, scope, or outcomes.
 - Do not invent launches, metrics, companies, or quotes.
-- If the article is off-topic, keep scores at 0 and write a short grounded summary.`;
+- If the article is off-topic, keep scores at 0 and write a short grounded summary.
+
+Dimension evidence contract (a 5-point item must satisfy it):
+${scoringEvidenceContract()}`;
+
+type ProviderProtocol = 'legacy' | 'openai';
+
+function providerProtocol(value: string | undefined): ProviderProtocol {
+  const normalized = normalizeAiProviderProtocol(value);
+  if (normalized === 'missing' || normalized === 'legacy') return 'legacy';
+  if (normalized === 'openai') return 'openai';
+  throw new Error(
+    `Unsupported AI provider protocol: ${value?.trim().toLowerCase() || 'unknown'}`,
+  );
+}
 
 function chatCompletionsUrl(endpoint: string): string {
   const trimmed = endpoint.replace(/\/+$/, '');
@@ -86,19 +140,48 @@ export class CapabilityService {
   private readonly logger = new Logger(CapabilityService.name);
 
   load(capabilityId: string): CapabilityExecutor {
+    const execute = async (
+      action: string,
+      input: unknown,
+      signal?: AbortSignal,
+    ): Promise<unknown> => {
+      const endpoint = resolveAiProviderEndpoint(process.env, capabilityId).value;
+      if (!endpoint) throw new Error(`No provider configured for ${capabilityId}`);
+      const apiKey = process.env.AI_PROVIDER_API_KEY;
+      const protocol = providerProtocol(process.env.AI_PROVIDER_PROTOCOL);
+      if (protocol === 'legacy') {
+        return this.callLegacy(
+          endpoint,
+          apiKey,
+          capabilityId,
+          action,
+          input,
+          signal,
+        );
+      }
+      return this.callOpenAiCompatible(
+        endpoint,
+        apiKey,
+        capabilityId,
+        action,
+        input,
+        signal,
+      );
+    };
+
     return {
-      call: async (action: string, input: unknown) => {
-        const endpoint =
-          process.env[`${capabilityId.toUpperCase()}_URL`] ||
-          process.env.AI_PROVIDER_URL;
-        if (!endpoint) throw new Error(`No provider configured for ${capabilityId}`);
-        const apiKey = process.env.AI_PROVIDER_API_KEY;
-        const protocol = (process.env.AI_PROVIDER_PROTOCOL || 'openai').toLowerCase();
-        if (protocol === 'legacy') {
-          return this.callLegacy(endpoint, apiKey, capabilityId, action, input);
-        }
-        return this.callOpenAiCompatible(endpoint, apiKey, capabilityId, action, input);
-      },
+      call: async (
+        action: string,
+        input: unknown,
+        _context?: unknown,
+        options?: { signal?: AbortSignal },
+      ) => execute(action, input, options?.signal),
+      callWithSignal: async (
+        action: string,
+        input: unknown,
+        _context: unknown,
+        signal: AbortSignal,
+      ) => execute(action, input, signal),
     };
   }
 
@@ -108,17 +191,25 @@ export class CapabilityService {
     capabilityId: string,
     action: string,
     input: unknown,
+    signal?: AbortSignal,
   ): Promise<unknown> {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+    return this.fetchProvider(
+      endpoint,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({ capabilityId, action, input }),
       },
-      body: JSON.stringify({ capabilityId, action, input }),
-    });
-    if (!response.ok) throw new Error(`AI provider returned ${response.status}`);
-    return response.json();
+      async (response, responseSignal) => {
+        if (!response.ok)
+          throw new Error(`AI provider returned ${response.status}`);
+        return this.readProviderJson(response, responseSignal);
+      },
+      signal,
+    );
   }
 
   private async callOpenAiCompatible(
@@ -127,34 +218,40 @@ export class CapabilityService {
     capabilityId: string,
     action: string,
     input: unknown,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const model = process.env.AI_PROVIDER_MODEL || 'deepseek-v4-flash';
     const system =
-      capabilityId === 'ai_article_scoring_1' && action === 'textToJson'
+      capabilityId === AI_SCORING_CAPABILITY_ID && action === 'textToJson'
         ? SCORING_JSON_INSTRUCTIONS
         : `Return JSON only for capability ${capabilityId} action ${action}.`;
-    const response = await fetch(chatCompletionsUrl(endpoint), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+    const payload = await this.fetchProvider(
+      chatCompletionsUrl(endpoint),
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: scoringUserPrompt(input) },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: scoringUserPrompt(input) },
-        ],
-      }),
-    });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      this.logger.warn(`AI provider returned ${response.status}`);
-      throw new Error(`AI provider returned ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ''}`);
-    }
-    const payload = (await response.json()) as ChatCompletionResponse;
+      async (response, responseSignal) => {
+        if (!response.ok) {
+          this.logger.warn(`AI provider returned ${response.status}`);
+          throw new Error(`AI provider returned ${response.status}`);
+        }
+        return this.readProviderJson(response, responseSignal) as Promise<ChatCompletionResponse>;
+      },
+      signal,
+    );
     const raw = messageText(payload);
     if (!raw.trim()) throw new Error('AI provider returned an empty completion');
     try {
@@ -162,5 +259,87 @@ export class CapabilityService {
     } catch {
       throw new Error('AI provider returned non-JSON content');
     }
+  }
+
+  private async fetchProvider<T>(
+    url: string,
+    init: RequestInit,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    externalSignal?: AbortSignal,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timeoutMs = this.providerTimeoutMs();
+    const abortFromCaller = () => {
+      controller.abort(externalSignal?.reason);
+    };
+    if (externalSignal?.aborted) abortFromCaller();
+    externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return await consume(response, controller.signal);
+    } finally {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abortFromCaller);
+    }
+  }
+
+  /** Keep body parsing inside the same cancellation window as the request. */
+  private readProviderJson(
+    response: Response,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    return this.withAbort(
+      () => response.json(),
+      signal,
+    );
+  }
+
+  private withAbort<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) {
+      return Promise.reject(
+        signal.reason || new DOMException('The operation was aborted', 'AbortError'),
+      );
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal.removeEventListener('abort', onAbort);
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(
+          signal.reason ||
+            new DOMException('The operation was aborted', 'AbortError'),
+        );
+      };
+
+      signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve()
+        .then(operation)
+        .then(
+          (value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(value);
+          },
+          (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error);
+          },
+        );
+      if (signal.aborted) onAbort();
+    });
+  }
+
+  private providerTimeoutMs(): number {
+    const configured = Number(process.env.AI_PROVIDER_TIMEOUT_MS);
+    return Number.isFinite(configured) && configured > 0
+      ? Math.floor(configured)
+      : 10 * 60 * 1000;
   }
 }
