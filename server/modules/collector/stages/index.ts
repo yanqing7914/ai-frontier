@@ -12,4 +12,6 @@ export { normalizeItems } from '../pipeline-normalize';
 export { canonicalizeDedupUrl, computeDedupHash, dedupBatch, filterAgainstExisting } from '../pipeline-dedup';
 export { planEventClusters } from '../event-cluster';
 export type { EventClusterInput, EventClusterGroup, EventClusterPlan } from '../event-cluster';
+export { runClusterStage } from './cluster-stage';
+export type { ClusterStageLogger, ClusterStageResult } from './cluster-stage';
 export { canPublishArticle } from '../publish-gate';

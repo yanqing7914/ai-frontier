@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { DRIZZLE_DATABASE } from '../../infrastructure/database';
 import type { PostgresJsDatabase } from '../../infrastructure/database';
-import { eq, ne, inArray, and, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { eq, ne, inArray, and, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   article, feedSource, directionScore, qualityGate,
   reviewItem, appConfig,
@@ -39,11 +39,8 @@ import {
   type PipelineArticle,
   type RawFetchResponse,
 } from './pipeline-types';
-import {
-  CLUSTER_WINDOW_HOURS,
-  MAX_CLUSTER_HISTORY_ARTICLES,
-  planEventClusters,
-} from './event-cluster';
+import { planEventClusters } from './event-cluster';
+import { runClusterStage } from './stages/cluster-stage';
 
 export {
   PIPELINE_STAGE_ORDER,
@@ -669,7 +666,7 @@ export class CollectorService {
     this.logger.log(`[7/12] classify: ok=${classOk}, degraded=${classDegraded}`);
 
     // ── Stage 8/12: cluster ──
-    const clusterResult = await this.clusterArticles(allNewArticles);
+    const clusterResult = await runClusterStage(this.db, allNewArticles, this.logger);
     this.logger.log(`[8/12] cluster: ${allNewArticles.length} new, groups=${clusterResult.groups}, comparisons=${clusterResult.comparisons}${clusterResult.degraded ? ', degraded' : ''}`);
 
     // ── Stage 9/12: rule_score (call ruleBasedScoreArticle, persist 9 direction_scores) ──
@@ -1086,54 +1083,6 @@ export class CollectorService {
       ON CONFLICT (article_id, reason) DO UPDATE SET detail = EXCLUDED.detail, blocked_at = CURRENT_TIMESTAMP
     `);
     await this.db.update(article).set({ status: 'blocked' }).where(eq(article.id, articleId));
-  }
-
-  // ─── Event Clustering ─────────────────────────────────────
-  private async clusterArticles(articles: PipelineArticle[]): Promise<{
-    groups: number;
-    comparisons: number;
-    degraded: boolean;
-  }> {
-    if (articles.length === 0) return { groups: 0, comparisons: 0, degraded: false };
-
-    let history: Array<{ id: string; title: string; url: string; clusterId: string | null }> = [];
-    let degraded = false;
-    try {
-      history = await this.db
-        .select({ id: article.id, title: article.title, url: article.url, clusterId: article.clusterId })
-        .from(article)
-        .where(and(
-          isNotNull(article.clusterId),
-          sql`COALESCE(${article.publishedAt}, ${article.collectedAt}) > NOW() - INTERVAL '${sql.raw(String(CLUSTER_WINDOW_HOURS))} hours'`,
-        ))
-        .limit(MAX_CLUSTER_HISTORY_ARTICLES);
-    } catch (error: unknown) {
-      // Cluster enrichment must never prevent scoring and publishing; a later run
-      // can attach this batch once the database is available again.
-      degraded = true;
-      this.logger.error(`Cluster history query failed; using batch-only clustering: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    const plan = planEventClusters([
-      ...history.map((row) => ({ id: row.id, title: row.title, url: row.url, clusterId: row.clusterId, isNew: false })),
-      ...articles.map((item) => ({ id: item.id, title: item.title, url: item.url, isNew: true })),
-    ]);
-    if (plan.comparisonBudgetExhausted) {
-      degraded = true;
-      this.logger.warn(`Cluster comparison budget reached after ${plan.comparisons} comparisons; remaining articles stay unclustered`);
-    }
-
-    try {
-      for (const group of plan.groups) {
-        const newIds = group.itemIds.filter((id) => articles.some((item) => item.id === id));
-        if (newIds.length === 0) continue;
-        await this.db.update(article).set({ clusterId: group.clusterId }).where(inArray(article.id, newIds));
-      }
-    } catch (error: unknown) {
-      degraded = true;
-      this.logger.error(`Cluster assignment failed; continuing pipeline: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    return { groups: plan.groups.length, comparisons: plan.comparisons, degraded };
   }
 
   // ─── Front Page Diversity Selection ───────────────────────
