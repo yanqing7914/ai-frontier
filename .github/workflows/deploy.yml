@@ -192,9 +192,11 @@ jobs:
               printf '%s\n' '[Service]' 'Type=simple'
               printf 'WorkingDirectory=%s/current\n' "$DEPLOY_PATH"
               printf 'ExecStart=%s/current/scripts/run.sh\n' "$DEPLOY_PATH"
-              printf 'EnvironmentFile=%s/.env\n' "$DEPLOY_PATH"
               if [ "$DEPLOY_ENV" = staging ]; then
+                printf 'EnvironmentFile=-%s/.env\n' "$DEPLOY_PATH"
                 printf '%s\n' 'Environment=SERVER_PORT=13011'
+              else
+                printf 'EnvironmentFile=%s/.env\n' "$DEPLOY_PATH"
               fi
               printf '%s\n' 'Restart=always' 'RestartSec=5'
               printf '%s\n\n' '' '[Install]'
