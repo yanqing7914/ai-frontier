@@ -69,7 +69,7 @@ jobs:
   deploy:
     name: Deploy to ${{ inputs.environment }}
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.environment == 'staging' && fromJSON('["self-hosted", "linux", "x64", "ai-frontier-staging"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     environment: ${{ inputs.environment }}
     steps:
