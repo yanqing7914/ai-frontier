@@ -191,7 +191,11 @@ jobs:
               printf '%s\n\n' 'After=network.target'
               printf '%s\n' '[Service]' 'Type=simple'
               printf 'WorkingDirectory=%s/current\n' "$DEPLOY_PATH"
-              printf 'ExecStart=%s/current/scripts/run.sh\n' "$DEPLOY_PATH"
+              if [ "$DEPLOY_ENV" = staging ]; then
+                printf 'ExecStart=/usr/bin/env SERVER_PORT=13011 %s/current/scripts/run.sh\n' "$DEPLOY_PATH"
+              else
+                printf 'ExecStart=%s/current/scripts/run.sh\n' "$DEPLOY_PATH"
+              fi
               if [ "$DEPLOY_ENV" = staging ]; then
                 printf 'EnvironmentFile=-%s/.env\n' "$DEPLOY_PATH"
                 printf '%s\n' 'Environment=SERVER_PORT=13011'
