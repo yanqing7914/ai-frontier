@@ -158,12 +158,6 @@ jobs:
           esac
           mkdir -p "$release"
           tar -xzf "/tmp/ai-frontier-release-$RELEASE_SHA.tgz" -C "$release"
-          # upload-artifact preserves the dist directory; flatten it so the
-          # release root matches scripts/run.sh and the systemd WorkingDirectory.
-          if [ -d "$release/dist" ]; then
-            cp -a "$release/dist/." "$release/"
-            rm -rf "$release/dist"
-          fi
           cd "$release"
           npm ci --omit=dev --ignore-scripts
           # Keep secrets outside releases while making runtime env discovery
