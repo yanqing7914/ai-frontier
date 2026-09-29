@@ -176,8 +176,10 @@ jobs:
           # Keep secrets outside releases while making runtime env discovery
           # independent of the systemd WorkingDirectory implementation.
           ln -sfn "$DEPLOY_PATH/.env" "$release/.env"
-          test -x "$release/scripts/run.sh"
-          test -f "$DEPLOY_PATH/.env"
+          test -f "$release/scripts/run.sh" || { echo "Launcher missing: $release/scripts/run.sh" >&2; exit 1; }
+          chmod +x "$release/scripts/run.sh"
+          test -x "$release/scripts/run.sh" || { echo "Launcher is not executable: $release/scripts/run.sh" >&2; exit 1; }
+          test -f "$DEPLOY_PATH/.env" || { echo "Runtime env file missing: $DEPLOY_PATH/.env" >&2; exit 1; }
           if ! "${systemctl_cmd[@]}" is-enabled --quiet "$service" 2>/dev/null; then
             echo "$service is not installed/enabled; refusing to start an unmanaged process." >&2
             exit 1
