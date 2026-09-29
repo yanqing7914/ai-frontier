@@ -200,6 +200,12 @@ jobs:
             exit 1
           fi
           "${systemctl_cmd[@]}" is-active --quiet "$service"
+          echo "Service status:"
+          "${systemctl_cmd[@]}" status --no-pager "$service" || true
+          if command -v ss >/dev/null 2>&1; then
+            echo "Listening sockets:"
+            ss -lntp || true
+          fi
           if [ -n "${HEALTHCHECK_URL:-}" ]; then
             health_url="${HEALTHCHECK_URL%/}"
             case "$health_url" in */health) ;; *) health_url="$health_url/health" ;; esac
