@@ -141,6 +141,7 @@ jobs:
           if [ -x /home/cltx/.local/node-v22.14.0/bin/node ]; then
             export PATH=/home/cltx/.local/node-v22.14.0/bin:$PATH
           fi
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
           DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH_B64" | base64 --decode)"
           DEPLOY_SERVICE="$(printf '%s' "$DEPLOY_SERVICE_B64" | base64 --decode)"
           DEPLOY_SYSTEMD_SCOPE="$(printf '%s' "$SYSTEMD_SCOPE_B64" | base64 --decode)"
