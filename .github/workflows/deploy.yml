@@ -146,6 +146,14 @@ jobs:
           DEPLOY_SERVICE="$(printf '%s' "$DEPLOY_SERVICE_B64" | base64 --decode)"
           DEPLOY_SYSTEMD_SCOPE="$(printf '%s' "$SYSTEMD_SCOPE_B64" | base64 --decode)"
           HEALTHCHECK_URL="$(printf '%s' "$HEALTHCHECK_URL_B64" | base64 --decode)"
+          echo "Deployment preflight: env=$DEPLOY_ENV path=$DEPLOY_PATH service=${DEPLOY_SERVICE:-default} scope=$DEPLOY_SYSTEMD_SCOPE"
+          test -d "$DEPLOY_PATH" || { echo "DEPLOY_PATH does not exist: $DEPLOY_PATH" >&2; exit 1; }
+          test -f "$DEPLOY_PATH/.env" || { echo "Runtime env file missing: $DEPLOY_PATH/.env" >&2; exit 1; }
+          command -v node >/dev/null || { echo 'Node.js is not available on target host' >&2; exit 1; }
+          node -v
+          command -v npm >/dev/null || { echo 'npm is not available on target host' >&2; exit 1; }
+          npm -v
+          command -v systemctl >/dev/null || { echo 'systemctl is not available on target host' >&2; exit 1; }
           release="$DEPLOY_PATH/releases/$RELEASE_SHA"
           service="${DEPLOY_SERVICE:-ai-frontier-${DEPLOY_ENV}.service}"
           case "$DEPLOY_SYSTEMD_SCOPE" in
@@ -157,6 +165,10 @@ jobs:
             ai-frontier-staging.service|ai-frontier-production.service) ;;
             *) echo "Unsupported service: $service" >&2; exit 1 ;;
           esac
+          if ! "${systemctl_cmd[@]}" --version >/dev/null 2>&1; then
+            echo "Unable to invoke systemd scope: $DEPLOY_SYSTEMD_SCOPE" >&2
+            exit 1
+          fi
           mkdir -p "$release"
           tar -xzf "/tmp/ai-frontier-release-$RELEASE_SHA.tgz" -C "$release"
           cd "$release"
