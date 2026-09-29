@@ -138,6 +138,9 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_SHA='$commit_sha' DEPLOY_ENV='${{ inputs.environment }}' DEPLOY_PATH_B64='$deploy_path_b64' DEPLOY_SERVICE_B64='$deploy_service_b64' SYSTEMD_SCOPE_B64='$systemd_scope_b64' HEALTHCHECK_URL_B64='$healthcheck_url_b64' bash -s" <<'REMOTE'
           set -euo pipefail
+          if [ -x /home/cltx/.local/node-v22.14.0/bin/node ]; then
+            export PATH=/home/cltx/.local/node-v22.14.0/bin:$PATH
+          fi
           DEPLOY_PATH="$(printf '%s' "$DEPLOY_PATH_B64" | base64 --decode)"
           DEPLOY_SERVICE="$(printf '%s' "$DEPLOY_SERVICE_B64" | base64 --decode)"
           DEPLOY_SYSTEMD_SCOPE="$(printf '%s' "$SYSTEMD_SCOPE_B64" | base64 --decode)"
