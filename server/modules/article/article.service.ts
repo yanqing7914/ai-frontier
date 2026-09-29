@@ -41,6 +41,7 @@ import { getOriginPolicy } from '../collector/trace-engine';
 import { normalizeDirection } from '@shared/api.interface';
 import { ALL_DIRECTION_IDS } from '@shared/directions';
 import { presentHotArticle } from './hot-article-presentation';
+import { CONTENT_POLICY } from '@shared/content-policy';
 
 @Injectable()
 export class ArticleService {
@@ -188,7 +189,9 @@ export class ArticleService {
       .where(eq(appConfig.key, 'publish_threshold'));
     const raw = config?.value;
     const parsed = typeof raw === 'number' ? raw : Number(raw);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 75;
+    return Number.isFinite(parsed) && parsed >= 0
+      ? parsed
+      : CONTENT_POLICY.selection.publishThreshold;
   }
 
   async getWorkbenchOverview(): Promise<WorkbenchOverview> {

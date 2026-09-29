@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ArticleService } from './article.service';
 import type {
   HotArticleItem,
@@ -10,25 +10,24 @@ import type {
   PaginatedResponse,
   TraceStatus,
 } from '@shared/api.interface';
+import { parsePagination } from '../../common/pagination';
+
+export { parsePagination } from '../../common/pagination';
 
 @Controller('api')
 export class ArticleController {
   constructor(private readonly articleService: ArticleService) {}
 
-  @Get('hot-articles')
+  /** Compatibility seam for internal callers; the public route lives in publication/. */
   async getHotArticles(
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-    @Query('directions') directions?: string,
+    page?: string,
+    pageSize?: string,
+    directions?: string,
   ): Promise<PaginatedResponse<HotArticleItem>> {
-    const { page: parsedPage, pageSize: parsedPageSize } = parsePagination(page, pageSize);
-    const directionArr = directions
-      ? directions.split(',').filter(Boolean)
-      : undefined;
+    const pagination = parsePagination(page, pageSize);
     return this.articleService.getHotArticles({
-      page: parsedPage,
-      pageSize: parsedPageSize,
-      directions: directionArr,
+      ...pagination,
+      directions: directions?.split(',').filter(Boolean),
     });
   }
 
@@ -100,28 +99,4 @@ export class ArticleController {
   ): Promise<ArticleTrace> {
     return this.articleService.getArticleTrace(id);
   }
-}
-
-const DEFAULT_PAGE = 1;
-const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE = 10_000;
-const MAX_PAGE_SIZE = 100;
-
-export function parsePagination(page?: string, pageSize?: string): { page: number; pageSize: number } {
-  return {
-    page: parsePositiveInteger(page, DEFAULT_PAGE, MAX_PAGE, 'page'),
-    pageSize: parsePositiveInteger(pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, 'pageSize'),
-  };
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number, max: number, name: string): number {
-  if (value === undefined || value === '') return fallback;
-  if (!/^\d+$/.test(value)) {
-    throw new BadRequestException(`${name} must be a positive integer`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) {
-    throw new BadRequestException(`${name} must be between 1 and ${max}`);
-  }
-  return parsed;
 }

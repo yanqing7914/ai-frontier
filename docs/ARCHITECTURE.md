@@ -27,3 +27,19 @@ Development boundaries:
 - `shared/` owns types and API contracts shared by both sides.
 - `test/` contains regression and contract tests.
 - `legacy/` and `archive/` are outside this repository and are reference-only.
+
+## AIHOT-inspired boundaries
+
+The project keeps its quality-first 12-stage collector, review workflow, trace
+data, and publish gates. It also adopts two boundaries from AIHOT so future
+public outputs do not grow their own query rules:
+
+- `shared/content-policy.ts` is the versioned home for editorial defaults. A
+  database setting can override a default, but fallback values are defined once.
+- `server/modules/publication/` is the shared read boundary for public hot
+  articles and daily digests. Pages, feeds, and future API or MCP adapters
+  should call this module instead of querying article tables directly.
+
+The legacy article and digest controllers remain as internal compatibility
+seams while callers migrate to the publication boundary. The collector remains
+the source of truth for ingestion, scoring, quality gates, and clustering.

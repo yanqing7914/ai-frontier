@@ -41,6 +41,7 @@ import {
 } from './pipeline-types';
 import { planEventClusters } from './event-cluster';
 import { runClusterStage } from './stages/cluster-stage';
+import { CONTENT_POLICY } from '@shared/content-policy';
 
 export {
   PIPELINE_STAGE_ORDER,
@@ -856,7 +857,12 @@ export class CollectorService {
     this.logger.log(`Rescore pre-gate: ${rescoreResult.succeeded} ok, ${rescoreResult.failed} fail`);
 
     // ── Stage 11/12: quality_gate ──
-    const publishThreshold = await this.getBoundedConfig('publish_threshold', 75, 0, 100);
+    const publishThreshold = await this.getBoundedConfig(
+      'publish_threshold',
+      CONTENT_POLICY.selection.publishThreshold,
+      0,
+      100,
+    );
     const minSuccessRate = await this.getBoundedConfig('source_min_success_rate', 30, 0, 100);
     const maxConsecFail = await this.getBoundedConfig('source_max_consecutive_failures', 5, 0, 1000);
     const autoApproveHours = await this.getBoundedConfig('auto_approve_hours', 24, 1, 24 * 30);
@@ -1088,11 +1094,17 @@ export class CollectorService {
   // ─── Front Page Diversity Selection ───────────────────────
 
   async selectForFrontPage(): Promise<void> {
-    const limit = await this.getConfig('daily_front_page_limit', 20);
+    const limit = await this.getConfig(
+      'daily_front_page_limit',
+      CONTENT_POLICY.selection.dailyFrontPageLimit,
+    );
     const sourceCap = Math.max(2, Math.ceil(limit / 5));
     const directionCap = Math.max(2, Math.ceil(limit / 2));
     const DIRECTION_ORDER = ['model', 'agent', 'multimodal', 'coding', 'infrastructure', 'data_eval', 'safety_governance', 'applications', 'business_ecosystem'];
-    const publishThreshold = await this.getConfig('publish_threshold', 75);
+    const publishThreshold = await this.getConfig(
+      'publish_threshold',
+      CONTENT_POLICY.selection.publishThreshold,
+    );
     const candidatesResult = await this.db.execute(sql`
       SELECT a.id, a.source_name, a.feed_source_id, a.cluster_id, a.primary_direction, a.primary_score,
              a.published_at, a.collected_at, fs.tier AS source_tier
