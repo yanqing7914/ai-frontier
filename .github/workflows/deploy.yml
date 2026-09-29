@@ -186,21 +186,21 @@ jobs:
             mkdir -p "$unit_dir"
             tmp_unit="$(mktemp "$unit_file.tmp.XXXXXX")"
             cat > "$tmp_unit" <<UNIT
-[Unit]
-Description=AI Frontier ${DEPLOY_ENV} backend
-After=network.target
+            [Unit]
+            Description=AI Frontier ${DEPLOY_ENV} backend
+            After=network.target
 
-[Service]
-Type=simple
-WorkingDirectory=$DEPLOY_PATH/current
-ExecStart=$DEPLOY_PATH/current/scripts/run.sh
-EnvironmentFile=$DEPLOY_PATH/.env
-Restart=always
-RestartSec=5
+            [Service]
+            Type=simple
+            WorkingDirectory=$DEPLOY_PATH/current
+            ExecStart=$DEPLOY_PATH/current/scripts/run.sh
+            EnvironmentFile=$DEPLOY_PATH/.env
+            Restart=always
+            RestartSec=5
 
-[Install]
-WantedBy=default.target
-UNIT
+            [Install]
+            WantedBy=default.target
+            UNIT
             mv "$tmp_unit" "$unit_file"
             "${systemctl_cmd[@]}" daemon-reload
             "${systemctl_cmd[@]}" enable "$service" >/dev/null
