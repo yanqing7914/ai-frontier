@@ -185,22 +185,18 @@ jobs:
             unit_file="$unit_dir/$service"
             mkdir -p "$unit_dir"
             tmp_unit="$(mktemp "$unit_file.tmp.XXXXXX")"
-            cat > "$tmp_unit" <<UNIT
-            [Unit]
-            Description=AI Frontier ${DEPLOY_ENV} backend
-            After=network.target
-
-            [Service]
-            Type=simple
-            WorkingDirectory=$DEPLOY_PATH/current
-            ExecStart=$DEPLOY_PATH/current/scripts/run.sh
-            EnvironmentFile=$DEPLOY_PATH/.env
-            Restart=always
-            RestartSec=5
-
-            [Install]
-            WantedBy=default.target
-            UNIT
+            {
+              printf '%s\n' '[Unit]'
+              printf 'Description=AI Frontier %s backend\n' "$DEPLOY_ENV"
+              printf '%s\n\n' 'After=network.target'
+              printf '%s\n' '[Service]' 'Type=simple'
+              printf 'WorkingDirectory=%s/current\n' "$DEPLOY_PATH"
+              printf 'ExecStart=%s/current/scripts/run.sh\n' "$DEPLOY_PATH"
+              printf 'EnvironmentFile=%s/.env\n' "$DEPLOY_PATH"
+              printf '%s\n' 'Restart=always' 'RestartSec=5'
+              printf '%s\n\n' '' '[Install]'
+              printf '%s\n' 'WantedBy=default.target'
+            } > "$tmp_unit"
             mv "$tmp_unit" "$unit_file"
             "${systemctl_cmd[@]}" daemon-reload
             "${systemctl_cmd[@]}" enable "$service" >/dev/null
